@@ -104,14 +104,18 @@ export async function renameUrlRemote(id: string, name: string): Promise<void> {
   await supabase.from('urls').update({ name }).eq('id', id)
 }
 
-export async function moveUrlRemote(id: string, folder_id: string | null): Promise<void> {
+export async function moveUrlRemote(id: string, folder_id: string | null, position?: number): Promise<void> {
   const supabase = getSupabase()
-  await supabase.from('urls').update({ folder_id }).eq('id', id)
+  const update: Record<string, unknown> = { folder_id }
+  if (position !== undefined) update.position = position
+  await supabase.from('urls').update(update).eq('id', id)
 }
 
-export async function moveFolderRemote(id: string, parent_id: string | null): Promise<void> {
+export async function moveFolderRemote(id: string, parent_id: string | null, position?: number): Promise<void> {
   const supabase = getSupabase()
-  await supabase.from('folders').update({ parent_id }).eq('id', id)
+  const update: Record<string, unknown> = { parent_id }
+  if (position !== undefined) update.position = position
+  await supabase.from('folders').update(update).eq('id', id)
 }
 
 export async function deleteUrlsRemote(ids: string[]): Promise<void> {

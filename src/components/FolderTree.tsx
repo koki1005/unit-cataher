@@ -1,7 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { useDraggable, useDroppable } from '@dnd-kit/core'
+import { useSortable, SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { useDroppable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
 import { ChevronRight, ChevronDown, Folder, FolderOpen, Link, Trash2, Pencil, Share2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -36,17 +37,18 @@ export function buildSortedItems(folders: FolderType[], urls: UrlItem[], parentI
   ].sort((a, b) => a.pos - b.pos)
 }
 
-function DraggableUrl({ item }: { item: UrlItem }) {
+function SortableUrl({ item }: { item: UrlItem }) {
   const { user, setUrls, reload, selectMode, selectedIds, toggleSelect } = useApp()
   const [renaming, setRenaming] = useState(false)
 
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: `url-${item.id}`,
     data: { type: 'url', id: item.id },
     disabled: selectMode,
   })
 
-  const style = isDragging ? {} : { transform: CSS.Transform.toString(transform) }
+  // Don't move original element — DragOverlay handles cursor following
+  const style = isDragging ? {} : { transform: CSS.Transform.toString(transform), transition }
 
   const handleDelete = async () => {
     if (!confirm(`「${item.name}」を削除しますか？`)) return
@@ -69,7 +71,7 @@ function DraggableUrl({ item }: { item: UrlItem }) {
         style={style}
         className={cn(
           'flex items-center gap-1 py-1.5 px-2 rounded-lg hover:bg-muted group',
-          isDragging && 'opacity-40 z-50',
+          isDragging && 'opacity-40',
           isSelected && 'bg-primary/10'
         )}
       >
@@ -113,12 +115,12 @@ function DraggableUrl({ item }: { item: UrlItem }) {
   )
 }
 
-function DraggableFolder({ folder, depth }: { folder: FolderType; depth: number }) {
+function SortableFolder({ folder, depth }: { folder: FolderType; depth: number }) {
   const { user, folders, urls, setFolders, setUrls, reload, selectMode, selectedIds, toggleSelect, pendingDropFolderId } = useApp()
   const [open, setOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
 
-  const { attributes, listeners, setNodeRef: setDragRef, transform, isDragging } = useDraggable({
+  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({
     id: `folder-${folder.id}`,
     data: { type: 'folder', id: folder.id },
     disabled: selectMode,
@@ -129,7 +131,7 @@ function DraggableFolder({ folder, depth }: { folder: FolderType; depth: number 
     data: { type: 'folder', id: folder.id },
   })
 
-  const style = isDragging ? {} : { transform: CSS.Transform.toString(transform) }
+  const style = isDragging ? {} : { transform: CSS.Transform.toString(transform), transition }
   const isPendingDrop = pendingDropFolderId === folder.id
 
   const handleDelete = async () => {
@@ -160,7 +162,7 @@ function DraggableFolder({ folder, depth }: { folder: FolderType; depth: number 
   return (
     <>
       <div
-        ref={node => { setDragRef(node); setDropRef(node) }}
+        ref={node => { setSortableRef(node); setDropRef(node) }}
         style={style}
         className={cn(
           'rounded-lg transition-colors',
@@ -218,14 +220,17 @@ type Props = { parentId: string | null; depth?: number }
 export default function FolderTree({ parentId, depth = 0 }: Props) {
   const { folders, urls } = useApp()
   const items = buildSortedItems(folders, urls, parentId)
+  const sortableIds = items.map(i => i.sortId)
 
   return (
-    <div className={depth > 0 ? 'ml-4 border-l border-border pl-2' : ''}>
-      {items.map(({ type, item }) =>
-        type === 'folder'
-          ? <DraggableFolder key={item.id} folder={item as FolderType} depth={depth} />
-          : <DraggableUrl key={item.id} item={item as UrlItem} />
-      )}
-    </div>
+    <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+      <div className={depth > 0 ? 'ml-4 border-l border-border pl-2' : ''}>
+        {items.map(({ type, item }) =>
+          type === 'folder'
+            ? <SortableFolder key={item.id} folder={item as FolderType} depth={depth} />
+            : <SortableUrl key={item.id} item={item as UrlItem} />
+        )}
+      </div>
+    </SortableContext>
   )
 }

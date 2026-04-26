@@ -3,18 +3,20 @@
 import { useState, useCallback } from 'react'
 import {
   DndContext, DragEndEvent, DragOverEvent, DragOverlay, DragStartEvent,
-  MouseSensor, TouchSensor, useSensor, useSensors, useDroppable, ClientRect,
+  MouseSensor, TouchSensor, useSensor, useSensors, useDroppable,
+  closestCenter, ClientRect,
 } from '@dnd-kit/core'
 import type { CollisionDetection } from '@dnd-kit/core'
+import { arrayMove } from '@dnd-kit/sortable'
 import { Plus, FolderPlus, UserCircle2, Link2, CheckSquare, X, Share2, Trash2 } from 'lucide-react'
-import FolderTree from '@/components/FolderTree'
+import FolderTree, { buildSortedItems } from '@/components/FolderTree'
 import AddSheet from '@/components/AddSheet'
 import CreateFolderDialog from '@/components/CreateFolderDialog'
 import AccountSheet from '@/components/AccountSheet'
 import { Button } from '@/components/ui/button'
 import { useApp } from '@/lib/store'
-import { moveUrl, moveFolder, getFolders, getUrls, deleteUrls, deleteFolders } from '@/lib/storage'
-import { moveUrlRemote, moveFolderRemote, deleteUrlsRemote, deleteFoldersRemote } from '@/lib/supabase-storage'
+import { moveUrl, moveFolder, getFolders, getUrls, deleteUrls, deleteFolders, reorderItems } from '@/lib/storage'
+import { moveUrlRemote, moveFolderRemote, deleteUrlsRemote, deleteFoldersRemote, reorderItemsRemote } from '@/lib/supabase-storage'
 import { Folder, UrlItem } from '@/lib/types'
 
 function RootDropZone() {
@@ -60,32 +62,31 @@ export default function HomePage() {
     useSensor(TouchSensor, { activationConstraint: { distance: 8 } })
   )
 
-  // Only match drop-folder-X (pointer over folder) or drop-root
+  // Center 40% of folder row → drop into folder, edges → reorder (closestCenter)
   const collisionDetection: CollisionDetection = useCallback((args) => {
     const { active, droppableContainers, droppableRects, pointerCoordinates } = args
 
-    if (!pointerCoordinates) return []
+    if (pointerCoordinates) {
+      for (const container of droppableContainers) {
+        const id = String(container.id)
+        if (!id.startsWith('folder-')) continue
+        if (id === String(active.id)) continue
 
-    for (const container of droppableContainers) {
-      const id = String(container.id)
-      if (!id.startsWith('drop-folder-')) continue
-      if (id === `drop-folder-${String(active.id).replace('folder-', '')}`) continue
+        const rect = droppableRects.get(container.id)
+        if (!rect) continue
 
-      const rect = droppableRects.get(container.id)
-      if (!rect) continue
-
-      if (inRect(rect, pointerCoordinates.x, pointerCoordinates.y)) {
-        return [{ id: container.id, data: container }]
+        if (inRect(rect, pointerCoordinates.x, pointerCoordinates.y)) {
+          const relY = (pointerCoordinates.y - rect.top) / rect.height
+          if (relY >= 0.3 && relY <= 0.7) {
+            const folderId = id.replace('folder-', '')
+            const dropContainer = droppableContainers.find(c => c.id === `drop-folder-${folderId}`)
+            if (dropContainer) return [{ id: dropContainer.id, data: dropContainer }]
+          }
+        }
       }
     }
 
-    const rootContainer = droppableContainers.find(c => String(c.id) === 'drop-root')
-    const rootRect = rootContainer && droppableRects.get(rootContainer.id)
-    if (rootContainer && rootRect && inRect(rootRect, pointerCoordinates.x, pointerCoordinates.y)) {
-      return [{ id: rootContainer.id, data: rootContainer }]
-    }
-
-    return []
+    return closestCenter(args)
   }, [])
 
   const handleDragStart = (e: DragStartEvent) => {
@@ -118,16 +119,18 @@ export default function HomePage() {
       if (activeData.type === 'url') {
         const url = urls.find(u => u.id === activeData.id)
         if (!url || url.folder_id === folderId) return
-        setUrls(urls.map(u => u.id === activeData.id ? { ...u, folder_id: folderId } : u))
-        if (user) moveUrlRemote(activeData.id, folderId).catch(() => reload())
-        else { moveUrl(activeData.id, folderId) }
+        const newPos = urls.filter(u => u.folder_id === folderId).reduce((m, u) => Math.max(m, u.position ?? -1), -1) + 1
+        setUrls(urls.map(u => u.id === activeData.id ? { ...u, folder_id: folderId, position: newPos } : u))
+        if (user) moveUrlRemote(activeData.id, folderId, newPos).catch(() => reload())
+        else { moveUrl(activeData.id, folderId, newPos) }
       } else {
         if (isDescendant(activeData.id, folderId)) return
         const folder = folders.find(f => f.id === activeData.id)
         if (!folder || folder.parent_id === folderId) return
-        setFolders(folders.map(f => f.id === activeData.id ? { ...f, parent_id: folderId } : f))
-        if (user) moveFolderRemote(activeData.id, folderId).catch(() => reload())
-        else { moveFolder(activeData.id, folderId) }
+        const newPos = folders.filter(f => f.parent_id === folderId).reduce((m, f) => Math.max(m, f.position ?? -1), -1) + 1
+        setFolders(folders.map(f => f.id === activeData.id ? { ...f, parent_id: folderId, position: newPos } : f))
+        if (user) moveFolderRemote(activeData.id, folderId, newPos).catch(() => reload())
+        else { moveFolder(activeData.id, folderId, newPos) }
       }
       return
     }
@@ -137,19 +140,51 @@ export default function HomePage() {
       if (activeData.type === 'url') {
         const url = urls.find(u => u.id === activeData.id)
         if (!url || url.folder_id === null) return
-        setUrls(urls.map(u => u.id === activeData.id ? { ...u, folder_id: null } : u))
-        if (user) moveUrlRemote(activeData.id, null).catch(() => reload())
-        else { moveUrl(activeData.id, null) }
+        const newPos = urls.filter(u => u.folder_id === null).reduce((m, u) => Math.max(m, u.position ?? -1), -1) + 1
+        setUrls(urls.map(u => u.id === activeData.id ? { ...u, folder_id: null, position: newPos } : u))
+        if (user) moveUrlRemote(activeData.id, null, newPos).catch(() => reload())
+        else { moveUrl(activeData.id, null, newPos) }
       } else {
         const folder = folders.find(f => f.id === activeData.id)
         if (!folder || folder.parent_id === null) return
-        setFolders(folders.map(f => f.id === activeData.id ? { ...f, parent_id: null } : f))
-        if (user) moveFolderRemote(activeData.id, null).catch(() => reload())
-        else { moveFolder(activeData.id, null) }
+        const newPos = folders.filter(f => f.parent_id === null).reduce((m, f) => Math.max(m, f.position ?? -1), -1) + 1
+        setFolders(folders.map(f => f.id === activeData.id ? { ...f, parent_id: null, position: newPos } : f))
+        if (user) moveFolderRemote(activeData.id, null, newPos).catch(() => reload())
+        else { moveFolder(activeData.id, null, newPos) }
       }
       return
     }
 
+    // --- Case 3: Reorder ---
+    if (active.id === over.id) return
+
+    const activeItem = activeData.type === 'url'
+      ? urls.find(u => u.id === activeData.id)
+      : folders.find(f => f.id === activeData.id)
+    if (!activeItem) return
+
+    const parentId = activeData.type === 'url'
+      ? (activeItem as UrlItem).folder_id
+      : (activeItem as Folder).parent_id
+
+    const levelItems = buildSortedItems(folders, urls, parentId)
+    const oldIndex = levelItems.findIndex(i => i.sortId === String(active.id))
+    const newIndex = levelItems.findIndex(i => i.sortId === String(over.id))
+    if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return
+
+    const reordered = arrayMove(levelItems, oldIndex, newIndex)
+    const folderUpdates = reordered.filter(i => i.type === 'folder').map(i => ({ id: i.item.id, position: reordered.indexOf(i) }))
+    const urlUpdates = reordered.filter(i => i.type === 'url').map(i => ({ id: i.item.id, position: reordered.indexOf(i) }))
+
+    const posMap = new Map([...folderUpdates, ...urlUpdates].map(u => [u.id, u.position]))
+    setFolders(folders.map(f => posMap.has(f.id) ? { ...f, position: posMap.get(f.id)! } : f))
+    setUrls(urls.map(u => posMap.has(u.id) ? { ...u, position: posMap.get(u.id)! } : u))
+
+    if (user) {
+      reorderItemsRemote(folderUpdates, urlUpdates).catch(() => reload())
+    } else {
+      reorderItems(folderUpdates, urlUpdates)
+    }
   }
 
   const collectUrlsFromFolders = (folderIds: string[]): string[] => {

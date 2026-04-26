@@ -89,13 +89,13 @@ export function renameUrl(id: string, name: string): void {
   localStorage.setItem(URLS_KEY, JSON.stringify(urls))
 }
 
-export function moveUrl(id: string, folder_id: string | null): void {
-  const urls = getUrls().map(u => (u.id === id ? { ...u, folder_id } : u))
+export function moveUrl(id: string, folder_id: string | null, position?: number): void {
+  const urls = getUrls().map(u => u.id === id ? { ...u, folder_id, ...(position !== undefined ? { position } : {}) } : u)
   localStorage.setItem(URLS_KEY, JSON.stringify(urls))
 }
 
-export function moveFolder(id: string, parent_id: string | null): void {
-  const folders = getFolders().map(f => (f.id === id ? { ...f, parent_id } : f))
+export function moveFolder(id: string, parent_id: string | null, position?: number): void {
+  const folders = getFolders().map(f => f.id === id ? { ...f, parent_id, ...(position !== undefined ? { position } : {}) } : f)
   localStorage.setItem(FOLDERS_KEY, JSON.stringify(folders))
 }
 
