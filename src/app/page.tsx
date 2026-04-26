@@ -1,10 +1,12 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import {
   DndContext, DragEndEvent, DragOverEvent, DragOverlay, DragStartEvent,
-  MouseSensor, TouchSensor, useSensor, useSensors, useDroppable, closestCenter,
+  MouseSensor, TouchSensor, useSensor, useSensors, useDroppable,
+  closestCenter, ClientRect,
 } from '@dnd-kit/core'
+import type { CollisionDetection } from '@dnd-kit/core'
 import { arrayMove } from '@dnd-kit/sortable'
 import { Plus, FolderPlus, UserCircle2, Link2, CheckSquare, X, Share2, Trash2 } from 'lucide-react'
 import FolderTree, { buildSortedItems } from '@/components/FolderTree'
@@ -35,6 +37,11 @@ function DragOverlayItem({ id, folders, urls }: { id: string; folders: Folder[];
   )
 }
 
+// Returns true if point is within rect
+function inRect(rect: ClientRect, x: number, y: number) {
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+}
+
 export default function HomePage() {
   const {
     user, folders, urls, setFolders, setUrls, reload,
@@ -48,16 +55,6 @@ export default function HomePage() {
   const [fabOpen, setFabOpen] = useState(false)
   const [draggingId, setDraggingId] = useState<string | null>(null)
 
-  const folderHoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const pendingDropRef = useRef<string | null>(null)
-
-  const clearHoverTimer = useCallback(() => {
-    if (folderHoverTimer.current) {
-      clearTimeout(folderHoverTimer.current)
-      folderHoverTimer.current = null
-    }
-  }, [])
-
   const isEmpty = folders.length === 0 && urls.length === 0
 
   const sensors = useSensors(
@@ -65,74 +62,79 @@ export default function HomePage() {
     useSensor(TouchSensor, { activationConstraint: { delay: 400, tolerance: 8 } })
   )
 
+  // Position-based collision: center 40% of folder = drop into, edges = reorder
+  const collisionDetection: CollisionDetection = useCallback((args) => {
+    const { active, droppableContainers, droppableRects, pointerCoordinates } = args
+
+    if (pointerCoordinates) {
+      for (const container of droppableContainers) {
+        const id = String(container.id)
+        if (!id.startsWith('folder-')) continue
+        if (id === String(active.id)) continue // skip self
+
+        const rect = droppableRects.get(container.id)
+        if (!rect) continue
+
+        if (inRect(rect, pointerCoordinates.x, pointerCoordinates.y)) {
+          const relY = (pointerCoordinates.y - rect.top) / rect.height
+          if (relY >= 0.3 && relY <= 0.7) {
+            // Center zone → drop into folder
+            const folderId = id.replace('folder-', '')
+            const dropContainer = droppableContainers.find(c => c.id === `drop-folder-${folderId}`)
+            if (dropContainer) return [{ id: dropContainer.id, data: dropContainer }]
+          }
+          // Edge zone → fall through to closestCenter (reorder)
+        }
+      }
+    }
+
+    return closestCenter(args)
+  }, [])
+
   const handleDragStart = (e: DragStartEvent) => {
     setDraggingId(String(e.active.id))
-    clearHoverTimer()
-    pendingDropRef.current = null
     setPendingDropFolderId(null)
   }
 
   const handleDragOver = (e: DragOverEvent) => {
     const overId = String(e.over?.id ?? '')
-    const activeData = e.active.data.current as { type: string; id: string } | undefined
-
-    if (overId.startsWith('folder-')) {
-      const folderId = overId.replace('folder-', '')
-      // Don't allow dropping a folder into itself
-      if (activeData?.type === 'folder' && activeData.id === folderId) return
-      if (pendingDropRef.current !== folderId) {
-        clearHoverTimer()
-        pendingDropRef.current = null
-        setPendingDropFolderId(null)
-        folderHoverTimer.current = setTimeout(() => {
-          pendingDropRef.current = folderId
-          setPendingDropFolderId(folderId)
-        }, 600)
-      }
-    } else {
-      clearHoverTimer()
-      if (pendingDropRef.current) {
-        pendingDropRef.current = null
-        setPendingDropFolderId(null)
-      }
-    }
+    setPendingDropFolderId(overId.startsWith('drop-folder-') ? overId.replace('drop-folder-', '') : null)
   }
 
   const handleDragEnd = async (e: DragEndEvent) => {
-    clearHoverTimer()
     setDraggingId(null)
-    const { active, over } = e
-    const pendingFolderId = pendingDropRef.current
-    pendingDropRef.current = null
     setPendingDropFolderId(null)
 
+    const { active, over } = e
     if (!over) return
 
+    const overId = String(over.id)
     const activeData = active.data.current as { type: string; id: string }
 
-    // --- Case 1: Hover-drop INTO folder ---
-    if (pendingFolderId) {
+    // --- Case 1: Drop INTO folder ---
+    if (overId.startsWith('drop-folder-')) {
+      const folderId = overId.replace('drop-folder-', '')
       const isDescendant = (checkId: string, targetId: string): boolean => {
         if (checkId === targetId) return true
         return folders.filter(f => f.parent_id === checkId).some(f => isDescendant(f.id, targetId))
       }
       if (activeData.type === 'url') {
         const url = urls.find(u => u.id === activeData.id)
-        if (!url || url.folder_id === pendingFolderId) return
-        if (user) { await moveUrlRemote(activeData.id, pendingFolderId); reload() }
-        else { moveUrl(activeData.id, pendingFolderId); setUrls(getUrls()) }
+        if (!url || url.folder_id === folderId) return
+        if (user) { await moveUrlRemote(activeData.id, folderId); reload() }
+        else { moveUrl(activeData.id, folderId); setUrls(getUrls()) }
       } else {
-        if (isDescendant(activeData.id, pendingFolderId)) return
+        if (isDescendant(activeData.id, folderId)) return
         const folder = folders.find(f => f.id === activeData.id)
-        if (!folder || folder.parent_id === pendingFolderId) return
-        if (user) { await moveFolderRemote(activeData.id, pendingFolderId); reload() }
-        else { moveFolder(activeData.id, pendingFolderId); setFolders(getFolders()) }
+        if (!folder || folder.parent_id === folderId) return
+        if (user) { await moveFolderRemote(activeData.id, folderId); reload() }
+        else { moveFolder(activeData.id, folderId); setFolders(getFolders()) }
       }
       return
     }
 
     // --- Case 2: Drop on root zone ---
-    if (String(over.id) === 'drop-root') {
+    if (overId === 'drop-root') {
       if (activeData.type === 'url') {
         const url = urls.find(u => u.id === activeData.id)
         if (!url || url.folder_id === null) return
@@ -150,7 +152,6 @@ export default function HomePage() {
     // --- Case 3: Reorder ---
     if (active.id === over.id) return
 
-    // Find active item's parent level
     const activeItem = activeData.type === 'url'
       ? urls.find(u => u.id === activeData.id)
       : folders.find(f => f.id === activeData.id)
@@ -166,12 +167,8 @@ export default function HomePage() {
     if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return
 
     const reordered = arrayMove(levelItems, oldIndex, newIndex)
-    const folderUpdates = reordered
-      .filter(i => i.type === 'folder')
-      .map((i, _idx) => ({ id: i.item.id, position: reordered.indexOf(i) }))
-    const urlUpdates = reordered
-      .filter(i => i.type === 'url')
-      .map((i, _idx) => ({ id: i.item.id, position: reordered.indexOf(i) }))
+    const folderUpdates = reordered.filter(i => i.type === 'folder').map((i, _) => ({ id: i.item.id, position: reordered.indexOf(i) }))
+    const urlUpdates = reordered.filter(i => i.type === 'url').map((i, _) => ({ id: i.item.id, position: reordered.indexOf(i) }))
 
     if (user) {
       await reorderItemsRemote(folderUpdates, urlUpdates)
@@ -183,7 +180,6 @@ export default function HomePage() {
     }
   }
 
-  // Collect all URLs in selected folders recursively
   const collectUrlsFromFolders = (folderIds: string[]): string[] => {
     const result: string[] = []
     const queue = [...folderIds]
@@ -235,13 +231,12 @@ export default function HomePage() {
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCenter}
+      collisionDetection={collisionDetection}
       onDragStart={handleDragStart}
       onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
     >
       <div className="min-h-screen bg-background flex flex-col max-w-lg mx-auto">
-        {/* Header */}
         <header className="sticky top-0 z-10 bg-background/80 backdrop-blur border-b border-border px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Link2 className="w-5 h-5 text-primary" />
@@ -267,7 +262,6 @@ export default function HomePage() {
           </div>
         </header>
 
-        {/* Content */}
         <main className="flex-1 px-4 py-4 pb-28">
           {isEmpty ? (
             <div className="flex flex-col items-center justify-center h-[60vh] text-center gap-4">
@@ -287,7 +281,6 @@ export default function HomePage() {
           )}
         </main>
 
-        {/* Select mode action bar */}
         {selectMode && (
           <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-lg z-30 bg-background border-t border-border px-4 py-3 flex items-center justify-between gap-3">
             <span className="text-sm text-muted-foreground">{selectedIds.size}件選択中</span>
@@ -305,7 +298,6 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* FAB */}
         {!selectMode && (
           <div className="fixed bottom-6 right-6 flex flex-col items-end gap-2 z-20">
             {fabOpen && (
