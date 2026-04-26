@@ -18,6 +18,15 @@ export default function QrCamera({ onDetected }: Props) {
     onDetectedRef.current = onDetected
   }, [onDetected])
 
+  // Suppress AbortError from browser when video element is removed while playing
+  useEffect(() => {
+    const handler = (e: PromiseRejectionEvent) => {
+      if (e.reason?.name === 'AbortError') e.preventDefault()
+    }
+    window.addEventListener('unhandledrejection', handler)
+    return () => window.removeEventListener('unhandledrejection', handler)
+  }, [])
+
   useEffect(() => {
     const id = 'qr-reader-' + Math.random().toString(36).slice(2)
     if (!containerRef.current) return
