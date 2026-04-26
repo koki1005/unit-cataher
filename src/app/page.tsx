@@ -7,16 +7,15 @@ import {
   closestCenter, ClientRect,
 } from '@dnd-kit/core'
 import type { CollisionDetection } from '@dnd-kit/core'
-import { arrayMove } from '@dnd-kit/sortable'
 import { Plus, FolderPlus, UserCircle2, Link2, CheckSquare, X, Share2, Trash2 } from 'lucide-react'
-import FolderTree, { buildSortedItems } from '@/components/FolderTree'
+import FolderTree from '@/components/FolderTree'
 import AddSheet from '@/components/AddSheet'
 import CreateFolderDialog from '@/components/CreateFolderDialog'
 import AccountSheet from '@/components/AccountSheet'
 import { Button } from '@/components/ui/button'
 import { useApp } from '@/lib/store'
-import { moveUrl, moveFolder, getFolders, getUrls, deleteUrls, deleteFolders, reorderItems } from '@/lib/storage'
-import { moveUrlRemote, moveFolderRemote, deleteUrlsRemote, deleteFoldersRemote, reorderItemsRemote } from '@/lib/supabase-storage'
+import { moveUrl, moveFolder, getFolders, getUrls, deleteUrls, deleteFolders } from '@/lib/storage'
+import { moveUrlRemote, moveFolderRemote, deleteUrlsRemote, deleteFoldersRemote } from '@/lib/supabase-storage'
 import { Folder, UrlItem } from '@/lib/types'
 
 function RootDropZone() {
@@ -62,7 +61,7 @@ export default function HomePage() {
     useSensor(TouchSensor, { activationConstraint: { delay: 400, tolerance: 8 } })
   )
 
-  // Position-based collision: center 40% of folder = drop into, edges = reorder
+  // Folder row = drop into, anywhere else = drop-root
   const collisionDetection: CollisionDetection = useCallback((args) => {
     const { active, droppableContainers, droppableRects, pointerCoordinates } = args
 
@@ -70,20 +69,15 @@ export default function HomePage() {
       for (const container of droppableContainers) {
         const id = String(container.id)
         if (!id.startsWith('folder-')) continue
-        if (id === String(active.id)) continue // skip self
+        if (id === String(active.id)) continue
 
         const rect = droppableRects.get(container.id)
         if (!rect) continue
 
         if (inRect(rect, pointerCoordinates.x, pointerCoordinates.y)) {
-          const relY = (pointerCoordinates.y - rect.top) / rect.height
-          if (relY >= 0.3 && relY <= 0.7) {
-            // Center zone → drop into folder
-            const folderId = id.replace('folder-', '')
-            const dropContainer = droppableContainers.find(c => c.id === `drop-folder-${folderId}`)
-            if (dropContainer) return [{ id: dropContainer.id, data: dropContainer }]
-          }
-          // Edge zone → fall through to closestCenter (reorder)
+          const folderId = id.replace('folder-', '')
+          const dropContainer = droppableContainers.find(c => c.id === `drop-folder-${folderId}`)
+          if (dropContainer) return [{ id: dropContainer.id, data: dropContainer }]
         }
       }
     }
@@ -149,35 +143,6 @@ export default function HomePage() {
       return
     }
 
-    // --- Case 3: Reorder ---
-    if (active.id === over.id) return
-
-    const activeItem = activeData.type === 'url'
-      ? urls.find(u => u.id === activeData.id)
-      : folders.find(f => f.id === activeData.id)
-    if (!activeItem) return
-
-    const parentId = activeData.type === 'url'
-      ? (activeItem as UrlItem).folder_id
-      : (activeItem as Folder).parent_id
-
-    const levelItems = buildSortedItems(folders, urls, parentId)
-    const oldIndex = levelItems.findIndex(i => i.sortId === String(active.id))
-    const newIndex = levelItems.findIndex(i => i.sortId === String(over.id))
-    if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return
-
-    const reordered = arrayMove(levelItems, oldIndex, newIndex)
-    const folderUpdates = reordered.filter(i => i.type === 'folder').map((i, _) => ({ id: i.item.id, position: reordered.indexOf(i) }))
-    const urlUpdates = reordered.filter(i => i.type === 'url').map((i, _) => ({ id: i.item.id, position: reordered.indexOf(i) }))
-
-    if (user) {
-      await reorderItemsRemote(folderUpdates, urlUpdates)
-      reload()
-    } else {
-      reorderItems(folderUpdates, urlUpdates)
-      setFolders(getFolders())
-      setUrls(getUrls())
-    }
   }
 
   const collectUrlsFromFolders = (folderIds: string[]): string[] => {
