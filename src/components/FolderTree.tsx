@@ -46,7 +46,7 @@ function DraggableUrl({ item }: { item: UrlItem }) {
     disabled: selectMode,
   })
 
-  const style = { transform: CSS.Transform.toString(transform) }
+  const style = isDragging ? {} : { transform: CSS.Transform.toString(transform) }
 
   const handleDelete = async () => {
     if (!confirm(`「${item.name}」を削除しますか？`)) return
@@ -129,7 +129,7 @@ function DraggableFolder({ folder, depth }: { folder: FolderType; depth: number 
     data: { type: 'folder', id: folder.id },
   })
 
-  const style = { transform: CSS.Transform.toString(transform) }
+  const style = isDragging ? {} : { transform: CSS.Transform.toString(transform) }
   const isPendingDrop = pendingDropFolderId === folder.id
 
   const handleDelete = async () => {

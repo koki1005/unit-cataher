@@ -57,7 +57,7 @@ export default function HomePage() {
 
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 400, tolerance: 8 } })
+    useSensor(TouchSensor, { activationConstraint: { distance: 8 } })
   )
 
   // Only match drop-folder-X (pointer over folder) or drop-root
@@ -118,14 +118,16 @@ export default function HomePage() {
       if (activeData.type === 'url') {
         const url = urls.find(u => u.id === activeData.id)
         if (!url || url.folder_id === folderId) return
-        if (user) { await moveUrlRemote(activeData.id, folderId); reload() }
-        else { moveUrl(activeData.id, folderId); setUrls(getUrls()) }
+        setUrls(urls.map(u => u.id === activeData.id ? { ...u, folder_id: folderId } : u))
+        if (user) moveUrlRemote(activeData.id, folderId).catch(() => reload())
+        else { moveUrl(activeData.id, folderId) }
       } else {
         if (isDescendant(activeData.id, folderId)) return
         const folder = folders.find(f => f.id === activeData.id)
         if (!folder || folder.parent_id === folderId) return
-        if (user) { await moveFolderRemote(activeData.id, folderId); reload() }
-        else { moveFolder(activeData.id, folderId); setFolders(getFolders()) }
+        setFolders(folders.map(f => f.id === activeData.id ? { ...f, parent_id: folderId } : f))
+        if (user) moveFolderRemote(activeData.id, folderId).catch(() => reload())
+        else { moveFolder(activeData.id, folderId) }
       }
       return
     }
@@ -135,13 +137,15 @@ export default function HomePage() {
       if (activeData.type === 'url') {
         const url = urls.find(u => u.id === activeData.id)
         if (!url || url.folder_id === null) return
-        if (user) { await moveUrlRemote(activeData.id, null); reload() }
-        else { moveUrl(activeData.id, null); setUrls(getUrls()) }
+        setUrls(urls.map(u => u.id === activeData.id ? { ...u, folder_id: null } : u))
+        if (user) moveUrlRemote(activeData.id, null).catch(() => reload())
+        else { moveUrl(activeData.id, null) }
       } else {
         const folder = folders.find(f => f.id === activeData.id)
         if (!folder || folder.parent_id === null) return
-        if (user) { await moveFolderRemote(activeData.id, null); reload() }
-        else { moveFolder(activeData.id, null); setFolders(getFolders()) }
+        setFolders(folders.map(f => f.id === activeData.id ? { ...f, parent_id: null } : f))
+        if (user) moveFolderRemote(activeData.id, null).catch(() => reload())
+        else { moveFolder(activeData.id, null) }
       }
       return
     }
