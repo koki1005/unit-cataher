@@ -81,8 +81,24 @@ export default function HomePage() {
   }
 
   const handleDragOver = (e: DragOverEvent) => {
-    const overId = String(e.over?.id ?? '')
+    const { active, over } = e
+    const overId = String(over?.id ?? '')
     setPendingDropFolderId(overId.startsWith('drop-folder-') ? overId.replace('drop-folder-', '') : null)
+
+    // Real-time reorder: update positions as user drags so state matches visual
+    if (!over || active.id === over.id || overId.startsWith('drop-')) return
+    const activeData = active.data.current as { type: string; id: string }
+    const activeItem = activeData.type === 'url' ? urls.find(u => u.id === activeData.id) : folders.find(f => f.id === activeData.id)
+    if (!activeItem) return
+    const parentId = activeData.type === 'url' ? (activeItem as UrlItem).folder_id : (activeItem as Folder).parent_id
+    const levelItems = buildSortedItems(folders, urls, parentId)
+    const oldIndex = levelItems.findIndex(i => i.sortId === String(active.id))
+    const newIndex = levelItems.findIndex(i => i.sortId === String(over.id))
+    if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return
+    const reordered = arrayMove(levelItems, oldIndex, newIndex)
+    const posMap = new Map(reordered.map((item, idx) => [item.item.id, idx]))
+    setFolders(folders.map(f => posMap.has(f.id) ? { ...f, position: posMap.get(f.id)! } : f))
+    setUrls(urls.map(u => posMap.has(u.id) ? { ...u, position: posMap.get(u.id)! } : u))
   }
 
   const handleDragEnd = async (e: DragEndEvent) => {
@@ -141,6 +157,7 @@ export default function HomePage() {
     }
 
     // --- Case 3: Reorder ---
+    // State already updated in handleDragOver; just persist to storage
     if (active.id === over.id) return
 
     const activeItem = activeData.type === 'url'
@@ -153,17 +170,8 @@ export default function HomePage() {
       : (activeItem as Folder).parent_id
 
     const levelItems = buildSortedItems(folders, urls, parentId)
-    const oldIndex = levelItems.findIndex(i => i.sortId === String(active.id))
-    const newIndex = levelItems.findIndex(i => i.sortId === String(over.id))
-    if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return
-
-    const reordered = arrayMove(levelItems, oldIndex, newIndex)
-    const folderUpdates = reordered.filter(i => i.type === 'folder').map(i => ({ id: i.item.id, position: reordered.indexOf(i) }))
-    const urlUpdates = reordered.filter(i => i.type === 'url').map(i => ({ id: i.item.id, position: reordered.indexOf(i) }))
-
-    const posMap = new Map([...folderUpdates, ...urlUpdates].map(u => [u.id, u.position]))
-    setFolders(folders.map(f => posMap.has(f.id) ? { ...f, position: posMap.get(f.id)! } : f))
-    setUrls(urls.map(u => posMap.has(u.id) ? { ...u, position: posMap.get(u.id)! } : u))
+    const folderUpdates = levelItems.filter(i => i.type === 'folder').map(i => ({ id: i.item.id, position: i.pos }))
+    const urlUpdates = levelItems.filter(i => i.type === 'url').map(i => ({ id: i.item.id, position: i.pos }))
 
     if (user) {
       reorderItemsRemote(folderUpdates, urlUpdates).catch(() => reload())
