@@ -1,9 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { useDraggable, useDroppable } from '@dnd-kit/core'
+import { useSortable, SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { ChevronRight, ChevronDown, Folder, FolderOpen, Link, Trash2, Pencil, Share2 } from 'lucide-react'
+import { ChevronRight, ChevronDown, Folder, FolderOpen, Link, Trash2, Pencil, Share2, FolderInput } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useApp } from '@/lib/store'
 import { Folder as FolderType, UrlItem } from '@/lib/types'
@@ -15,6 +15,7 @@ import {
   deleteFolderRemote, renameFolderRemote, deleteUrlRemote, renameUrlRemote,
 } from '@/lib/supabase-storage'
 import RenameDialog from './RenameDialog'
+import MoveItemSheet from './MoveItemSheet'
 import { cn } from '@/lib/utils'
 
 async function shareItems(items: UrlItem[]) {
@@ -36,17 +37,18 @@ export function buildSortedItems(folders: FolderType[], urls: UrlItem[], parentI
   ].sort((a, b) => a.pos - b.pos)
 }
 
-function DraggableUrl({ item }: { item: UrlItem }) {
+function SortableUrl({ item }: { item: UrlItem }) {
   const { user, setUrls, reload, selectMode, selectedIds, toggleSelect } = useApp()
   const [renaming, setRenaming] = useState(false)
+  const [moving, setMoving] = useState(false)
 
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: `url-${item.id}`,
     data: { type: 'url', id: item.id },
     disabled: selectMode,
   })
 
-  const style = { transform: CSS.Transform.toString(transform) }
+  const style = { transform: CSS.Transform.toString(transform), transition }
   const isSelected = selectedIds.has(item.id)
 
   const handleDelete = async () => {
@@ -66,12 +68,10 @@ function DraggableUrl({ item }: { item: UrlItem }) {
       <div
         ref={setNodeRef}
         style={style}
-        {...(selectMode ? {} : { ...listeners, ...attributes })}
         className={cn(
-          'flex items-center gap-1 py-1.5 px-2 rounded-lg hover:bg-muted group cursor-grab active:cursor-grabbing',
+          'flex items-center gap-1 py-1.5 px-2 rounded-lg hover:bg-muted group',
           isDragging && 'opacity-40',
-          isSelected && 'bg-primary/10',
-          selectMode && 'cursor-default'
+          isSelected && 'bg-primary/10'
         )}
       >
         {selectMode ? (
@@ -82,19 +82,23 @@ function DraggableUrl({ item }: { item: UrlItem }) {
           </button>
         ) : (
           <>
-            <a
-              href={item.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1.5 flex-1 min-w-0"
-              onPointerDown={e => e.stopPropagation()}
-            >
+            <div {...listeners} {...attributes} className="cursor-grab active:cursor-grabbing p-1 -ml-1 text-muted-foreground/40 hover:text-muted-foreground touch-none shrink-0">
+              <svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor">
+                <circle cx="2" cy="2" r="1.5"/><circle cx="8" cy="2" r="1.5"/>
+                <circle cx="2" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/>
+                <circle cx="2" cy="14" r="1.5"/><circle cx="8" cy="14" r="1.5"/>
+              </svg>
+            </div>
+            <a href={item.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 flex-1 min-w-0">
               <Link className="w-4 h-4 shrink-0 text-blue-500" />
               <span className="text-sm truncate">{item.name}</span>
             </a>
-            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity" onPointerDown={e => e.stopPropagation()}>
+            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
               <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => shareItems([item])}>
                 <Share2 className="w-3 h-3" />
+              </Button>
+              <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => setMoving(true)}>
+                <FolderInput className="w-3 h-3" />
               </Button>
               <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => setRenaming(true)}>
                 <Pencil className="w-3 h-3" />
@@ -106,31 +110,25 @@ function DraggableUrl({ item }: { item: UrlItem }) {
           </>
         )}
       </div>
-      {renaming && (
-        <RenameDialog open initialName={item.name} onClose={() => setRenaming(false)} onSave={handleRename} />
-      )}
+      {renaming && <RenameDialog open initialName={item.name} onClose={() => setRenaming(false)} onSave={handleRename} />}
+      {moving && <MoveItemSheet open item={item} itemType="url" onClose={() => setMoving(false)} />}
     </>
   )
 }
 
-function DraggableFolder({ folder, depth }: { folder: FolderType; depth: number }) {
-  const { user, folders, urls, setFolders, setUrls, reload, selectMode, selectedIds, toggleSelect, pendingDropFolderId } = useApp()
+function SortableFolder({ folder, depth }: { folder: FolderType; depth: number }) {
+  const { user, folders, urls, setFolders, setUrls, reload, selectMode, selectedIds, toggleSelect } = useApp()
   const [open, setOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
+  const [moving, setMoving] = useState(false)
 
-  const { attributes, listeners, setNodeRef: setDragRef, transform, isDragging } = useDraggable({
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: `folder-${folder.id}`,
     data: { type: 'folder', id: folder.id },
     disabled: selectMode,
   })
 
-  const { setNodeRef: setDropRef } = useDroppable({
-    id: `drop-folder-${folder.id}`,
-    data: { type: 'folder', id: folder.id },
-  })
-
-  const style = { transform: CSS.Transform.toString(transform) }
-  const isPendingDrop = pendingDropFolderId === folder.id
+  const style = { transform: CSS.Transform.toString(transform), transition }
   const isSelected = selectedIds.has(folder.id)
 
   const handleDelete = async () => {
@@ -159,19 +157,11 @@ function DraggableFolder({ folder, depth }: { folder: FolderType; depth: number 
   return (
     <>
       <div
-        ref={node => { setDragRef(node); setDropRef(node) }}
+        ref={setNodeRef}
         style={style}
-        className={cn(
-          'rounded-lg transition-colors',
-          isDragging && 'opacity-40',
-          isPendingDrop && 'bg-primary/15 ring-2 ring-primary/40',
-          isSelected && 'bg-primary/10'
-        )}
+        className={cn('rounded-lg transition-colors', isDragging && 'opacity-40', isSelected && 'bg-primary/10')}
       >
-        <div
-          className={cn('flex items-center gap-1 py-1.5 px-2 group', !selectMode && 'cursor-grab active:cursor-grabbing')}
-          {...(selectMode ? {} : { ...listeners, ...attributes })}
-        >
+        <div className="flex items-center gap-1 py-1.5 px-2 group">
           {selectMode ? (
             <button onClick={() => toggleSelect(folder.id)} className="flex items-center gap-1.5 flex-1 min-w-0">
               <input type="checkbox" readOnly checked={isSelected} className="w-4 h-4 shrink-0 accent-primary" />
@@ -180,18 +170,24 @@ function DraggableFolder({ folder, depth }: { folder: FolderType; depth: number 
             </button>
           ) : (
             <>
-              <button
-                onClick={() => setOpen(p => !p)}
-                onPointerDown={e => e.stopPropagation()}
-                className="flex items-center gap-1.5 flex-1 min-w-0"
-              >
+              <div {...listeners} {...attributes} className="cursor-grab active:cursor-grabbing p-1 -ml-1 text-muted-foreground/40 hover:text-muted-foreground touch-none shrink-0">
+                <svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor">
+                  <circle cx="2" cy="2" r="1.5"/><circle cx="8" cy="2" r="1.5"/>
+                  <circle cx="2" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/>
+                  <circle cx="2" cy="14" r="1.5"/><circle cx="8" cy="14" r="1.5"/>
+                </svg>
+              </div>
+              <button onClick={() => setOpen(p => !p)} className="flex items-center gap-1.5 flex-1 min-w-0">
                 {open ? <ChevronDown className="w-4 h-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 shrink-0 text-muted-foreground" />}
                 {open ? <FolderOpen className="w-4 h-4 shrink-0 text-yellow-500" /> : <Folder className="w-4 h-4 shrink-0 text-yellow-500" />}
                 <span className="text-sm font-medium truncate">{folder.name}</span>
               </button>
-              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity" onPointerDown={e => e.stopPropagation()}>
+              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                 <Button size="icon" variant="ghost" className="h-6 w-6" onClick={handleShare}>
                   <Share2 className="w-3 h-3" />
+                </Button>
+                <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => setMoving(true)}>
+                  <FolderInput className="w-3 h-3" />
                 </Button>
                 <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => setRenaming(true)}>
                   <Pencil className="w-3 h-3" />
@@ -205,9 +201,8 @@ function DraggableFolder({ folder, depth }: { folder: FolderType; depth: number 
         </div>
         {open && <FolderTree parentId={folder.id} depth={depth + 1} />}
       </div>
-      {renaming && (
-        <RenameDialog open initialName={folder.name} onClose={() => setRenaming(false)} onSave={handleRename} />
-      )}
+      {renaming && <RenameDialog open initialName={folder.name} onClose={() => setRenaming(false)} onSave={handleRename} />}
+      {moving && <MoveItemSheet open item={folder} itemType="folder" onClose={() => setMoving(false)} />}
     </>
   )
 }
@@ -217,14 +212,17 @@ type Props = { parentId: string | null; depth?: number }
 export default function FolderTree({ parentId, depth = 0 }: Props) {
   const { folders, urls } = useApp()
   const items = buildSortedItems(folders, urls, parentId)
+  const sortableIds = items.map(i => i.sortId)
 
   return (
-    <div className={depth > 0 ? 'ml-4 border-l border-border pl-2' : ''}>
-      {items.map(({ type, item }) =>
-        type === 'folder'
-          ? <DraggableFolder key={item.id} folder={item as FolderType} depth={depth} />
-          : <DraggableUrl key={item.id} item={item as UrlItem} />
-      )}
-    </div>
+    <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+      <div className={depth > 0 ? 'ml-4 border-l border-border pl-2' : ''}>
+        {items.map(({ type, item }) =>
+          type === 'folder'
+            ? <SortableFolder key={item.id} folder={item as FolderType} depth={depth} />
+            : <SortableUrl key={item.id} item={item as UrlItem} />
+        )}
+      </div>
+    </SortableContext>
   )
 }

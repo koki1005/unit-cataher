@@ -17,9 +17,6 @@ export type AppContextType = {
   selectedIds: Set<string>
   toggleSelect: (id: string) => void
   clearSelection: () => void
-  // drag state
-  pendingDropFolderId: string | null
-  setPendingDropFolderId: (id: string | null) => void
 }
 
 export const AppContext = createContext<AppContextType>({
@@ -35,8 +32,6 @@ export const AppContext = createContext<AppContextType>({
   selectedIds: new Set(),
   toggleSelect: () => {},
   clearSelection: () => {},
-  pendingDropFolderId: null,
-  setPendingDropFolderId: () => {},
 })
 
 export function useApp() {

@@ -14,7 +14,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const [urls, setUrls] = useState<UrlItem[]>([])
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [pendingDropFolderId, setPendingDropFolderId] = useState<string | null>(null)
 
   const loadData = useCallback(async (u: User | null) => {
     if (u) {
@@ -68,7 +67,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       reload: () => loadData(user),
       selectMode, setSelectMode,
       selectedIds, toggleSelect, clearSelection,
-      pendingDropFolderId, setPendingDropFolderId,
     }}>
       {children}
     </AppContext.Provider>
