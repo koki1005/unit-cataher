@@ -34,7 +34,13 @@ export async function loginUser(account_name: string): Promise<{ user: User | nu
 // Folders
 export async function getFoldersRemote(user_id: string): Promise<Folder[]> {
   const supabase = getSupabase()
-  const { data } = await supabase.from('folders').select('*').eq('user_id', user_id).order('position', { ascending: true, nullsFirst: false })
+  const { data, error } = await supabase
+    .from('folders')
+    .select('*')
+    .eq('user_id', user_id)
+    .order('position', { ascending: true, nullsFirst: false })
+    .order('created_at', { ascending: true })
+  if (error) throw error
   return data ?? []
 }
 
@@ -44,17 +50,30 @@ export async function saveFolderRemote(
   parent_id: string | null
 ): Promise<Folder | null> {
   const supabase = getSupabase()
-  const { data } = await supabase
+  let positionQuery = supabase
     .from('folders')
-    .insert({ user_id, name, parent_id })
+    .select('position')
+    .eq('user_id', user_id)
+  positionQuery = parent_id === null
+    ? positionQuery.is('parent_id', null)
+    : positionQuery.eq('parent_id', parent_id)
+  const { data: siblings, error: positionError } = await positionQuery
+  if (positionError) throw positionError
+  const position = (siblings ?? []).reduce((max, item) => Math.max(max, item.position ?? -1), -1) + 1
+
+  const { data, error } = await supabase
+    .from('folders')
+    .insert({ user_id, name, parent_id, position })
     .select()
     .single()
+  if (error) throw error
   return data
 }
 
 export async function renameFolderRemote(id: string, name: string): Promise<void> {
   const supabase = getSupabase()
-  await supabase.from('folders').update({ name }).eq('id', id)
+  const { error } = await supabase.from('folders').update({ name }).eq('id', id)
+  if (error) throw error
 }
 
 export async function deleteFolderRemote(id: string, allFolders: Folder[]): Promise<void> {
@@ -67,15 +86,23 @@ export async function deleteFolderRemote(id: string, allFolders: Folder[]): Prom
     allFolders.filter(f => f.parent_id === current).forEach(f => queue.push(f.id))
   }
   for (const fid of Array.from(toDelete)) {
-    await supabase.from('urls').delete().eq('folder_id', fid)
-    await supabase.from('folders').delete().eq('id', fid)
+    const { error: urlError } = await supabase.from('urls').delete().eq('folder_id', fid)
+    if (urlError) throw urlError
+    const { error: folderError } = await supabase.from('folders').delete().eq('id', fid)
+    if (folderError) throw folderError
   }
 }
 
 // URLs
 export async function getUrlsRemote(user_id: string): Promise<UrlItem[]> {
   const supabase = getSupabase()
-  const { data } = await supabase.from('urls').select('*').eq('user_id', user_id).order('position', { ascending: true, nullsFirst: false })
+  const { data, error } = await supabase
+    .from('urls')
+    .select('*')
+    .eq('user_id', user_id)
+    .order('position', { ascending: true, nullsFirst: false })
+    .order('created_at', { ascending: true })
+  if (error) throw error
   return data ?? []
 }
 
@@ -86,41 +113,58 @@ export async function saveUrlRemote(
   folder_id: string | null
 ): Promise<UrlItem | null> {
   const supabase = getSupabase()
-  const { data } = await supabase
+  let positionQuery = supabase
     .from('urls')
-    .insert({ user_id, name, url, folder_id })
+    .select('position')
+    .eq('user_id', user_id)
+  positionQuery = folder_id === null
+    ? positionQuery.is('folder_id', null)
+    : positionQuery.eq('folder_id', folder_id)
+  const { data: siblings, error: positionError } = await positionQuery
+  if (positionError) throw positionError
+  const position = (siblings ?? []).reduce((max, item) => Math.max(max, item.position ?? -1), -1) + 1
+
+  const { data, error } = await supabase
+    .from('urls')
+    .insert({ user_id, name, url, folder_id, position })
     .select()
     .single()
+  if (error) throw error
   return data
 }
 
 export async function deleteUrlRemote(id: string): Promise<void> {
   const supabase = getSupabase()
-  await supabase.from('urls').delete().eq('id', id)
+  const { error } = await supabase.from('urls').delete().eq('id', id)
+  if (error) throw error
 }
 
 export async function renameUrlRemote(id: string, name: string): Promise<void> {
   const supabase = getSupabase()
-  await supabase.from('urls').update({ name }).eq('id', id)
+  const { error } = await supabase.from('urls').update({ name }).eq('id', id)
+  if (error) throw error
 }
 
 export async function moveUrlRemote(id: string, folder_id: string | null, position?: number): Promise<void> {
   const supabase = getSupabase()
   const update: Record<string, unknown> = { folder_id }
   if (position !== undefined) update.position = position
-  await supabase.from('urls').update(update).eq('id', id)
+  const { error } = await supabase.from('urls').update(update).eq('id', id)
+  if (error) throw error
 }
 
 export async function moveFolderRemote(id: string, parent_id: string | null, position?: number): Promise<void> {
   const supabase = getSupabase()
   const update: Record<string, unknown> = { parent_id }
   if (position !== undefined) update.position = position
-  await supabase.from('folders').update(update).eq('id', id)
+  const { error } = await supabase.from('folders').update(update).eq('id', id)
+  if (error) throw error
 }
 
 export async function deleteUrlsRemote(ids: string[]): Promise<void> {
   const supabase = getSupabase()
-  await supabase.from('urls').delete().in('id', ids)
+  const { error } = await supabase.from('urls').delete().in('id', ids)
+  if (error) throw error
 }
 
 export async function reorderItemsRemote(
@@ -128,10 +172,12 @@ export async function reorderItemsRemote(
   urlUpdates: Array<{ id: string; position: number }>
 ): Promise<void> {
   const supabase = getSupabase()
-  await Promise.all([
+  const results = await Promise.all([
     ...folderUpdates.map(({ id, position }) => supabase.from('folders').update({ position }).eq('id', id)),
     ...urlUpdates.map(({ id, position }) => supabase.from('urls').update({ position }).eq('id', id)),
   ])
+  const failed = results.find(result => result.error)
+  if (failed?.error) throw failed.error
 }
 
 export async function deleteFoldersRemote(ids: string[], allFolders: Folder[]): Promise<void> {
@@ -146,7 +192,9 @@ export async function deleteFoldersRemote(ids: string[], allFolders: Folder[]): 
     }
   }
   for (const fid of Array.from(toDelete)) {
-    await supabase.from('urls').delete().eq('folder_id', fid)
-    await supabase.from('folders').delete().eq('id', fid)
+    const { error: urlError } = await supabase.from('urls').delete().eq('folder_id', fid)
+    if (urlError) throw urlError
+    const { error: folderError } = await supabase.from('folders').delete().eq('id', fid)
+    if (folderError) throw folderError
   }
 }

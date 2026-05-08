@@ -11,6 +11,7 @@ create table if not exists folders (
   user_id uuid references users(id) on delete cascade,
   name text not null,
   parent_id uuid references folders(id) on delete cascade,
+  position integer not null default 0,
   created_at timestamptz not null default now()
 );
 
@@ -20,8 +21,15 @@ create table if not exists urls (
   folder_id uuid references folders(id) on delete set null,
   name text not null,
   url text not null,
+  position integer not null default 0,
   created_at timestamptz not null default now()
 );
+
+create index if not exists folders_user_parent_position_idx
+  on folders(user_id, parent_id, position);
+
+create index if not exists urls_user_folder_position_idx
+  on urls(user_id, folder_id, position);
 
 -- Enable Row Level Security
 alter table users enable row level security;

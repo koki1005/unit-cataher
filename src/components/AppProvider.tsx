@@ -14,6 +14,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const [urls, setUrls] = useState<UrlItem[]>([])
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [moveMode, setMoveMode] = useState(false)
 
   const loadData = useCallback(async (u: User | null) => {
     if (u) {
@@ -21,9 +22,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         const [f, ul] = await Promise.all([getFoldersRemote(u.id), getUrlsRemote(u.id)])
         setFolders(f)
         setUrls(ul)
-      } catch {
-        setFolders([])
-        setUrls([])
+      } catch (error) {
+        console.error('Failed to load remote Unit Catcher data', error)
       }
     } else {
       setFolders(getFolders())
@@ -67,6 +67,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       reload: () => loadData(user),
       selectMode, setSelectMode,
       selectedIds, toggleSelect, clearSelection,
+      moveMode, setMoveMode,
     }}>
       {children}
     </AppContext.Provider>

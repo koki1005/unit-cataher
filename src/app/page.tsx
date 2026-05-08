@@ -4,24 +4,25 @@ import { useState } from 'react'
 import {
   DndContext, DragEndEvent, DragOverEvent,
   MouseSensor, TouchSensor, useSensor, useSensors,
-  closestCenter,
+  closestCenter, pointerWithin,
 } from '@dnd-kit/core'
 import { arrayMove } from '@dnd-kit/sortable'
-import { Plus, FolderPlus, UserCircle2, Link2, CheckSquare, X, Share2, Trash2 } from 'lucide-react'
+import { Plus, FolderPlus, UserCircle2, Link2, CheckSquare, X, Share2, Trash2, ArrowUpDown, FolderInput } from 'lucide-react'
 import FolderTree, { buildSortedItems } from '@/components/FolderTree'
 import AddSheet from '@/components/AddSheet'
 import CreateFolderDialog from '@/components/CreateFolderDialog'
 import AccountSheet from '@/components/AccountSheet'
 import { Button } from '@/components/ui/button'
 import { useApp } from '@/lib/store'
-import { getFolders, getUrls, deleteUrls, deleteFolders, reorderItems } from '@/lib/storage'
-import { deleteUrlsRemote, deleteFoldersRemote, reorderItemsRemote } from '@/lib/supabase-storage'
+import { getFolders, getUrls, deleteUrls, deleteFolders, reorderItems, moveUrl, moveFolder } from '@/lib/storage'
+import { deleteUrlsRemote, deleteFoldersRemote, reorderItemsRemote, moveUrlRemote, moveFolderRemote } from '@/lib/supabase-storage'
 import { Folder, UrlItem } from '@/lib/types'
 
 export default function HomePage() {
   const {
     user, folders, urls, setFolders, setUrls, reload,
     selectMode, setSelectMode, selectedIds, clearSelection,
+    moveMode, setMoveMode,
   } = useApp()
 
   const [addOpen, setAddOpen] = useState(false)
@@ -36,7 +37,9 @@ export default function HomePage() {
     useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 8 } })
   )
 
-  const handleDragOver = (e: DragOverEvent) => {
+  // ---- Sort mode handlers ----
+
+  const handleSortDragOver = (e: DragOverEvent) => {
     const { active, over } = e
     if (!over || active.id === over.id) return
 
@@ -61,7 +64,7 @@ export default function HomePage() {
     setUrls(urls.map(u => posMap.has(u.id) ? { ...u, position: posMap.get(u.id)! } : u))
   }
 
-  const handleDragEnd = (e: DragEndEvent) => {
+  const handleSortDragEnd = (e: DragEndEvent) => {
     const { active, over } = e
     if (!over || active.id === over.id) return
 
@@ -83,6 +86,128 @@ export default function HomePage() {
       reorderItemsRemote(folderUpdates, urlUpdates).catch(() => reload())
     } else {
       reorderItems(folderUpdates, urlUpdates)
+    }
+  }
+
+  // ---- Move mode handler ----
+
+  const handleMoveDragEnd = (e: DragEndEvent) => {
+    const { active, over } = e
+    if (!over) return
+
+    const activeData = active.data.current as { type: 'url' | 'folder'; id: string; folder_id?: string | null; parent_id?: string | null }
+    const overData = over.data.current as { type: string; containerId?: string | null; index?: number; id?: string }
+
+    if (overData.type !== 'gap' && overData.type !== 'folder') return
+
+    // フォルダへ直接ドロップ → そのフォルダの末尾に追加
+    if (overData.type === 'folder') {
+      const targetFolderId = overData.id ?? null
+      const currentContainerId = activeData.type === 'url' ? (activeData.folder_id ?? null) : (activeData.parent_id ?? null)
+      if (targetFolderId === currentContainerId) return
+      if (!activeData.type || (activeData.type === 'folder' && targetFolderId !== null)) {
+        const isDescendant = (checkId: string, target: string): boolean => {
+          if (checkId === target) return true
+          return folders.filter(f => f.parent_id === checkId).some(f => isDescendant(f.id, target))
+        }
+        if (activeData.type === 'folder' && isDescendant(activeData.id, targetFolderId!)) return
+      }
+      const isUrl = activeData.type === 'url'
+      const newPos = isUrl
+        ? urls.filter(u => u.folder_id === targetFolderId).reduce((m, u) => Math.max(m, u.position ?? -1), -1) + 1
+        : folders.filter(f => f.parent_id === targetFolderId && f.id !== activeData.id).reduce((m, f) => Math.max(m, f.position ?? -1), -1) + 1
+      if (isUrl) {
+        setUrls(urls.map(u => u.id === activeData.id ? { ...u, folder_id: targetFolderId, position: newPos } : u))
+        if (user) moveUrlRemote(activeData.id, targetFolderId, newPos).catch(() => reload())
+        else moveUrl(activeData.id, targetFolderId, newPos)
+      } else {
+        setFolders(folders.map(f => f.id === activeData.id ? { ...f, parent_id: targetFolderId, position: newPos } : f))
+        if (user) moveFolderRemote(activeData.id, targetFolderId, newPos).catch(() => reload())
+        else moveFolder(activeData.id, targetFolderId, newPos)
+      }
+      return
+    }
+
+    const targetContainerId = overData.containerId ?? null
+    const targetIndex = overData.index ?? 0
+    const itemId = activeData.id
+    const isUrl = activeData.type === 'url'
+    const currentContainerId = isUrl ? (activeData.folder_id ?? null) : (activeData.parent_id ?? null)
+
+    // No-op: same effective position
+    if (currentContainerId === targetContainerId) {
+      const currentItems = buildSortedItems(folders, urls, currentContainerId)
+      const currentIdx = currentItems.findIndex(i => i.item.id === itemId)
+      if (targetIndex === currentIdx || targetIndex === currentIdx + 1) return
+    }
+
+    // Prevent dropping folder into its own descendant
+    if (!isUrl && targetContainerId !== null) {
+      const isDescendant = (checkId: string, target: string): boolean => {
+        if (checkId === target) return true
+        return folders.filter(f => f.parent_id === checkId).some(f => isDescendant(f.id, target))
+      }
+      if (isDescendant(itemId, targetContainerId)) return
+    }
+
+    // Build target container items without the dragged item
+    const filteredFolders = isUrl ? folders : folders.filter(f => f.id !== itemId)
+    const filteredUrls = isUrl ? urls.filter(u => u.id !== itemId) : urls
+    const targetItems = buildSortedItems(filteredFolders, filteredUrls, targetContainerId)
+
+    // Insert dragged item at target index
+    const draggedItem = isUrl
+      ? { type: 'url' as const, item: urls.find(u => u.id === itemId)!, sortId: `url-${itemId}`, pos: 0 }
+      : { type: 'folder' as const, item: folders.find(f => f.id === itemId)!, sortId: `folder-${itemId}`, pos: 0 }
+    targetItems.splice(targetIndex, 0, draggedItem)
+
+    // Build position maps
+    const urlPositions: { id: string; position: number }[] = []
+    const folderPositions: { id: string; position: number }[] = []
+
+    targetItems.forEach((item, i) => {
+      if (item.type === 'url') urlPositions.push({ id: item.item.id, position: i })
+      else folderPositions.push({ id: item.item.id, position: i })
+    })
+
+    // If cross-container, also recalculate source container positions
+    if (currentContainerId !== targetContainerId) {
+      const sourceItems = buildSortedItems(filteredFolders, filteredUrls, currentContainerId)
+      sourceItems.forEach((item, i) => {
+        if (item.type === 'url') urlPositions.push({ id: item.item.id, position: i })
+        else folderPositions.push({ id: item.item.id, position: i })
+      })
+    }
+
+    const urlPosMap = new Map(urlPositions.map(u => [u.id, u.position]))
+    const folderPosMap = new Map(folderPositions.map(f => [f.id, f.position]))
+
+    // Apply optimistic state
+    setUrls(urls.map(u => {
+      if (isUrl && u.id === itemId) return { ...u, folder_id: targetContainerId, position: urlPosMap.get(u.id) ?? u.position }
+      const pos = urlPosMap.get(u.id)
+      return pos !== undefined ? { ...u, position: pos } : u
+    }))
+    setFolders(folders.map(f => {
+      if (!isUrl && f.id === itemId) return { ...f, parent_id: targetContainerId, position: folderPosMap.get(f.id) ?? f.position }
+      const pos = folderPosMap.get(f.id)
+      return pos !== undefined ? { ...f, position: pos } : f
+    }))
+
+    // Save to storage
+    const movedItemPos = isUrl ? urlPosMap.get(itemId) : folderPosMap.get(itemId)
+    const folderReorders = folderPositions.filter(f => !(!isUrl && f.id === itemId))
+    const urlReorders = urlPositions.filter(u => !(isUrl && u.id === itemId))
+
+    if (user) {
+      const itemSave = isUrl
+        ? moveUrlRemote(itemId, targetContainerId, movedItemPos)
+        : moveFolderRemote(itemId, targetContainerId, movedItemPos)
+      Promise.all([itemSave, reorderItemsRemote(folderReorders, urlReorders)]).catch(() => reload())
+    } else {
+      if (isUrl) moveUrl(itemId, targetContainerId, movedItemPos)
+      else moveFolder(itemId, targetContainerId, movedItemPos)
+      reorderItems(folderReorders, urlReorders)
     }
   }
 
@@ -136,32 +261,41 @@ export default function HomePage() {
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCenter}
-      onDragOver={handleDragOver}
-      onDragEnd={handleDragEnd}
+      collisionDetection={moveMode ? pointerWithin : closestCenter}
+      onDragOver={moveMode ? undefined : handleSortDragOver}
+      onDragEnd={moveMode ? handleMoveDragEnd : handleSortDragEnd}
     >
       <div className="min-h-screen bg-background flex flex-col max-w-lg mx-auto">
         <header className="sticky top-0 z-10 bg-background/80 backdrop-blur border-b border-border px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Link2 className="w-5 h-5 text-primary" />
-            <h1 className="font-bold text-lg tracking-tight">Unit Catcher</h1>
+          <div className="flex items-center gap-2 min-w-0 shrink">
+            <Link2 className="w-5 h-5 text-primary shrink-0" />
+            <h1 className="font-bold text-lg tracking-tight truncate">Unit Catcher</h1>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 shrink-0">
             {!isEmpty && (
-              <button
-                onClick={() => { setSelectMode(!selectMode); if (selectMode) clearSelection() }}
-                className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition-colors ${selectMode ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-muted'}`}
-              >
-                <CheckSquare className="w-3.5 h-3.5" />
-                選択
-              </button>
+              <>
+                <button
+                  onClick={() => { setSelectMode(!selectMode); if (selectMode) clearSelection() }}
+                  className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition-colors ${selectMode ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-muted'}`}
+                >
+                  <CheckSquare className="w-3.5 h-3.5" />
+                  選択
+                </button>
+                <button
+                  onClick={() => setMoveMode(!moveMode)}
+                  className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition-colors ${moveMode ? 'bg-orange-500 text-white' : 'text-muted-foreground hover:text-foreground hover:bg-muted'}`}
+                >
+                  {moveMode ? <FolderInput className="w-3.5 h-3.5" /> : <ArrowUpDown className="w-3.5 h-3.5" />}
+                  {moveMode ? '移動中' : '並べ替え'}
+                </button>
+              </>
             )}
             <button
               onClick={() => setAccountOpen(true)}
-              className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0"
             >
               <UserCircle2 className="w-5 h-5" />
-              <span className="max-w-[100px] truncate">{user ? user.account_name : 'ゲスト'}</span>
+              <span className="max-w-[60px] truncate hidden sm:inline">{user ? user.account_name : 'ゲスト'}</span>
             </button>
           </div>
         </header>
@@ -186,14 +320,14 @@ export default function HomePage() {
           <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-lg z-30 bg-background border-t border-border px-4 py-3 flex items-center justify-between gap-3">
             <span className="text-sm text-muted-foreground">{selectedIds.size}件選択中</span>
             <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={handleShare} disabled={selectedIds.size === 0}>
-                <Share2 className="w-4 h-4 mr-1" />共有
+              <Button variant="outline" onClick={handleShare} disabled={selectedIds.size === 0}>
+                <Share2 className="w-4 h-4 mr-1.5" />共有
               </Button>
-              <Button variant="destructive" size="sm" onClick={handleDeleteSelected} disabled={selectedIds.size === 0}>
-                <Trash2 className="w-4 h-4 mr-1" />削除
+              <Button variant="destructive" onClick={handleDeleteSelected} disabled={selectedIds.size === 0}>
+                <Trash2 className="w-4 h-4 mr-1.5" />削除
               </Button>
-              <Button variant="ghost" size="sm" onClick={clearSelection}>
-                <X className="w-4 h-4" />
+              <Button variant="ghost" size="icon" onClick={clearSelection}>
+                <X className="w-5 h-5" />
               </Button>
             </div>
           </div>

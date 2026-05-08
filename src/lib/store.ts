@@ -17,6 +17,9 @@ export type AppContextType = {
   selectedIds: Set<string>
   toggleSelect: (id: string) => void
   clearSelection: () => void
+  // move mode (drag = folder in/out) vs sort mode (drag = reorder)
+  moveMode: boolean
+  setMoveMode: (v: boolean) => void
 }
 
 export const AppContext = createContext<AppContextType>({
@@ -32,6 +35,8 @@ export const AppContext = createContext<AppContextType>({
   selectedIds: new Set(),
   toggleSelect: () => {},
   clearSelection: () => {},
+  moveMode: false,
+  setMoveMode: () => {},
 })
 
 export function useApp() {
