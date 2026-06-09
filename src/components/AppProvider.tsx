@@ -36,13 +36,25 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const [bgVersion, setBgVersion] = useState(0)
   const [isHydrating, setIsHydrating] = useState(true)
   const hydratedUserIdRef = useRef<string | null>(null)
+  const initialLoadDoneRef = useRef(false)
 
   const loadData = useCallback(async (u: User | null) => {
+    const start = Date.now()
+    const finish = async () => {
+      if (!initialLoadDoneRef.current) {
+        const elapsed = Date.now() - start
+        const remaining = 1000 - elapsed
+        if (remaining > 0) await new Promise(r => setTimeout(r, remaining))
+        initialLoadDoneRef.current = true
+      }
+      setIsHydrating(false)
+    }
+
     if (!u) {
       hydratedUserIdRef.current = null
       setFolders(getFolders())
       setUrls(getUrls())
-      setIsHydrating(false)
+      await finish()
       return
     }
 
@@ -61,7 +73,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('Failed to load remote Unit Catcher data', error)
     } finally {
-      setIsHydrating(false)
+      await finish()
     }
   }, [])
 
