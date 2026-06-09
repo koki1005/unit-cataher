@@ -1,59 +1,23 @@
--- Unit Catcher database schema
+-- Unit Catcher: パスワード機能追加マイグレーション
+-- 既存DBにこのファイルをSupabase SQL Editorで実行する
 
 create extension if not exists pgcrypto;
 
-create table if not exists users (
-  id uuid primary key default gen_random_uuid(),
-  account_name text not null unique check (length(account_name) >= 8),
-  password_hash text,
-  created_at timestamptz not null default now()
-);
-
+-- 1. users テーブルに password_hash 列を追加 (既存ユーザはNULL)
 alter table users add column if not exists password_hash text;
 
-create table if not exists folders (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid references users(id) on delete cascade,
-  name text not null,
-  parent_id uuid references folders(id) on delete cascade,
-  position integer not null default 0,
-  created_at timestamptz not null default now()
-);
-
-create table if not exists urls (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid references users(id) on delete cascade,
-  folder_id uuid references folders(id) on delete set null,
-  name text not null,
-  url text not null,
-  position integer not null default 0,
-  created_at timestamptz not null default now()
-);
-
-create index if not exists folders_user_parent_position_idx
-  on folders(user_id, parent_id, position);
-
-create index if not exists urls_user_folder_position_idx
-  on urls(user_id, folder_id, position);
-
--- Enable Row Level Security
-alter table users enable row level security;
-alter table folders enable row level security;
-alter table urls enable row level security;
-
--- RLS policies
--- users: deny direct access; all operations must go through SECURITY DEFINER RPCs
+-- 2. RLS: users への直接アクセスを禁止し RPC 経由に統一
 drop policy if exists "allow all on users" on users;
 drop policy if exists "deny direct on users" on users;
 create policy "deny direct on users" on users for all using (false) with check (false);
 
--- folders/urls: keep open (account-name-based auth handled in app)
-drop policy if exists "allow all on folders" on folders;
-drop policy if exists "allow all on urls" on urls;
-create policy "allow all on folders" on folders for all using (true) with check (true);
-create policy "allow all on urls" on urls for all using (true) with check (true);
+-- 3. RPC 関数群: 既存定義があると戻り値の型変更でエラーになるため先にDROPする
+drop function if exists register_user_with_password(text, text);
+drop function if exists login_with_password(text, text);
+drop function if exists set_user_password(uuid, text, text);
+drop function if exists change_user_password(uuid, text, text);
 
--- RPC: register a new user with password (password required)
+-- 4. RPC: 新規ユーザ登録 (パスワード必須)
 create or replace function register_user_with_password(
   p_account_name text,
   p_password text
@@ -87,7 +51,7 @@ begin
 end;
 $$;
 
--- RPC: login. p_password may be null/empty for legacy users without a password.
+-- 4. RPC: ログイン (パスワード未設定アカウントは has_password=false で返す)
 create or replace function login_with_password(
   p_account_name text,
   p_password text
@@ -106,7 +70,6 @@ begin
   end if;
 
   if v_row.password_hash is null then
-    -- legacy account: login without password, will be forced to set one
     return query select v_row.id, v_row.account_name, v_row.created_at, false;
     return;
   end if;
@@ -123,7 +86,7 @@ begin
 end;
 $$;
 
--- RPC: set password for users who have no password yet (initial setup)
+-- 5. RPC: パスワード未設定ユーザの初回パスワード設定
 create or replace function set_user_password(
   p_user_id uuid,
   p_account_name text,
@@ -157,7 +120,7 @@ begin
 end;
 $$;
 
--- RPC: change password (requires current password)
+-- 6. RPC: パスワード変更 (現在のパスワード必須)
 create or replace function change_user_password(
   p_user_id uuid,
   p_current_password text,
@@ -194,7 +157,7 @@ begin
 end;
 $$;
 
--- Allow anon/auth roles to call the RPCs
+-- 7. anon/authenticated ロールに RPC 実行権限を付与
 grant execute on function register_user_with_password(text, text) to anon, authenticated;
 grant execute on function login_with_password(text, text) to anon, authenticated;
 grant execute on function set_user_password(uuid, text, text) to anon, authenticated;

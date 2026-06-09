@@ -20,6 +20,11 @@ export type AppContextType = {
   // move mode (drag = folder in/out) vs sort mode (drag = reorder)
   moveMode: boolean
   setMoveMode: (v: boolean) => void
+  // guest bg refresh trigger
+  bgVersion: number
+  bumpBgVersion: () => void
+  // loading flag
+  isHydrating: boolean
 }
 
 export const AppContext = createContext<AppContextType>({
@@ -37,6 +42,9 @@ export const AppContext = createContext<AppContextType>({
   clearSelection: () => {},
   moveMode: false,
   setMoveMode: () => {},
+  bgVersion: 0,
+  bumpBgVersion: () => {},
+  isHydrating: true,
 })
 
 export function useApp() {

@@ -2,33 +2,158 @@ import { getSupabase } from './supabase'
 import { Folder, UrlItem, User } from './types'
 
 // Users
-export async function registerUser(account_name: string): Promise<{ user: User | null; error: string | null }> {
-  const supabase = getSupabase()
-  const { data: existing } = await supabase
-    .from('users')
-    .select('id')
-    .eq('account_name', account_name)
-    .single()
-  if (existing) return { user: null, error: 'そのアカウント名は既に使われています' }
-
-  const { data, error } = await supabase
-    .from('users')
-    .insert({ account_name })
-    .select()
-    .single()
-  if (error) return { user: null, error: error.message }
-  return { user: data, error: null }
+function translateAuthError(message: string | undefined): string {
+  if (!message) return '不明なエラーが発生しました'
+  if (message.includes('account_name_too_short')) return 'アカウント名は8文字以上で入力してください'
+  if (message.includes('account_name_taken')) return 'そのアカウント名は既に使われています'
+  if (message.includes('account_not_found')) return 'アカウントが見つかりません'
+  if (message.includes('password_required')) return 'パスワードを入力してください'
+  if (message.includes('invalid_password')) return 'パスワードが間違っています'
+  if (message.includes('password_already_set')) return 'パスワードは既に設定されています'
+  if (message.includes('password_not_set')) return 'パスワードが未設定です'
+  return message
 }
 
-export async function loginUser(account_name: string): Promise<{ user: User | null; error: string | null }> {
+export async function registerUser(
+  account_name: string,
+  password: string
+): Promise<{ user: User | null; error: string | null }> {
   const supabase = getSupabase()
-  const { data, error } = await supabase
-    .from('users')
-    .select('*')
-    .eq('account_name', account_name)
-    .single()
-  if (error || !data) return { user: null, error: 'アカウントが見つかりません' }
-  return { user: data, error: null }
+  const { data, error } = await supabase.rpc('register_user_with_password', {
+    p_account_name: account_name,
+    p_password: password,
+  })
+  if (error) return { user: null, error: translateAuthError(error.message) }
+  const row = Array.isArray(data) ? data[0] : data
+  if (!row) return { user: null, error: '登録に失敗しました' }
+  return { user: row as User, error: null }
+}
+
+export async function loginUser(
+  account_name: string,
+  password: string
+): Promise<{ user: User | null; error: string | null }> {
+  const supabase = getSupabase()
+  const { data, error } = await supabase.rpc('login_with_password', {
+    p_account_name: account_name,
+    p_password: password,
+  })
+  if (error) return { user: null, error: translateAuthError(error.message) }
+  const row = Array.isArray(data) ? data[0] : data
+  if (!row) return { user: null, error: 'アカウントが見つかりません' }
+  return { user: row as User, error: null }
+}
+
+export async function setUserPassword(
+  user_id: string,
+  account_name: string,
+  new_password: string
+): Promise<{ error: string | null }> {
+  const supabase = getSupabase()
+  const { error } = await supabase.rpc('set_user_password', {
+    p_user_id: user_id,
+    p_account_name: account_name,
+    p_new_password: new_password,
+  })
+  if (error) return { error: translateAuthError(error.message) }
+  return { error: null }
+}
+
+export async function changeUserPassword(
+  user_id: string,
+  current_password: string,
+  new_password: string
+): Promise<{ error: string | null }> {
+  const supabase = getSupabase()
+  const { error } = await supabase.rpc('change_user_password', {
+    p_user_id: user_id,
+    p_current_password: current_password,
+    p_new_password: new_password,
+  })
+  if (error) return { error: translateAuthError(error.message) }
+  return { error: null }
+}
+
+// ---- Backgrounds ----
+
+const BG_BUCKET = 'backgrounds'
+
+function extFromMime(type: string): string {
+  if (type === 'image/jpeg' || type === 'image/jpg') return 'jpg'
+  if (type === 'image/png') return 'png'
+  if (type === 'image/webp') return 'webp'
+  if (type === 'image/gif') return 'gif'
+  return 'bin'
+}
+
+export async function uploadBackgroundImage(
+  user_id: string,
+  scope: 'global' | 'folder' | 'url',
+  scope_id: string,
+  file: File
+): Promise<{ url: string | null; error: string | null }> {
+  const supabase = getSupabase()
+  const ext = extFromMime(file.type)
+  const path = `${user_id}/${scope}-${scope_id}-${Date.now()}.${ext}`
+  const { error: uploadError } = await supabase.storage
+    .from(BG_BUCKET)
+    .upload(path, file, { upsert: true, contentType: file.type })
+  if (uploadError) return { url: null, error: uploadError.message }
+  const { data } = supabase.storage.from(BG_BUCKET).getPublicUrl(path)
+  return { url: data.publicUrl, error: null }
+}
+
+export async function setUserBackgroundRemote(
+  user_id: string,
+  image_url: string | null,
+  focal_x: number,
+  focal_y: number,
+  focal_x_pc: number,
+  focal_y_pc: number
+): Promise<{ error: string | null }> {
+  const supabase = getSupabase()
+  const { error } = await supabase.rpc('set_user_background', {
+    p_user_id: user_id,
+    p_image_url: image_url,
+    p_focal_x: focal_x,
+    p_focal_y: focal_y,
+    p_focal_x_pc: focal_x_pc,
+    p_focal_y_pc: focal_y_pc,
+  })
+  if (error) return { error: error.message }
+  return { error: null }
+}
+
+export async function setFolderBackgroundRemote(
+  id: string,
+  image_url: string | null,
+  focal_x: number,
+  focal_y: number,
+  focal_x_pc: number,
+  focal_y_pc: number
+): Promise<void> {
+  const supabase = getSupabase()
+  const { error } = await supabase
+    .from('folders')
+    .update({ bg_image_url: image_url, bg_focal_x: focal_x, bg_focal_y: focal_y, bg_focal_x_pc: focal_x_pc, bg_focal_y_pc: focal_y_pc })
+    .eq('id', id)
+  if (error) throw error
+}
+
+export async function setUrlBackgroundRemote(
+  id: string,
+  image_url: string | null,
+  focal_x: number,
+  focal_y: number,
+  focal_x_pc: number,
+  focal_y_pc: number
+): Promise<void> {
+  const supabase = getSupabase()
+  const { error } = await supabase
+    .from('urls')
+    .update({ bg_image_url: image_url, bg_focal_x: focal_x, bg_focal_y: focal_y, bg_focal_x_pc: focal_x_pc, bg_focal_y_pc: focal_y_pc })
+    .eq('id', id)
+  if (error) throw error
 }
 
 // Folders

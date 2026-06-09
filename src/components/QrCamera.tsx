@@ -34,6 +34,7 @@ export default function QrCamera({ onDetected }: Props) {
 
     const scanner = new Html5Qrcode(id)
     scannerRef.current = scanner
+    let cancelled = false
 
     scanner.start(
       { facingMode: 'environment' },
@@ -46,12 +47,17 @@ export default function QrCamera({ onDetected }: Props) {
       },
       undefined
     ).then(() => {
-      isStartedRef.current = true
+      if (cancelled) {
+        scanner.stop().catch(() => {})
+      } else {
+        isStartedRef.current = true
+      }
     }).catch(() => {
       setError('カメラのアクセスが拒否されました')
     })
 
     return () => {
+      cancelled = true
       if (isStartedRef.current) {
         isStartedRef.current = false
         scanner.stop().catch(() => {})

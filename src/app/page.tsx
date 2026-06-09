@@ -7,14 +7,17 @@ import {
   closestCenter, pointerWithin,
 } from '@dnd-kit/core'
 import { arrayMove } from '@dnd-kit/sortable'
-import { Plus, FolderPlus, UserCircle2, Link2, CheckSquare, X, Share2, Trash2, ArrowUpDown, FolderInput } from 'lucide-react'
-import FolderTree, { buildSortedItems } from '@/components/FolderTree'
+import { Plus, FolderPlus, UserCircle2, Link2, CheckSquare, X, Share2, Trash2, ArrowUpDown, FolderInput, Image as ImageIcon } from 'lucide-react'
+import FolderTree, { buildSortedItems, useIsPcViewport } from '@/components/FolderTree'
 import AddSheet from '@/components/AddSheet'
 import CreateFolderDialog from '@/components/CreateFolderDialog'
 import AccountSheet from '@/components/AccountSheet'
+import PasswordSetupRequired from '@/components/PasswordSetupRequired'
+import GlobalBackgroundDialog from '@/components/GlobalBackgroundDialog'
+import AppSkeleton from '@/components/AppSkeleton'
 import { Button } from '@/components/ui/button'
 import { useApp } from '@/lib/store'
-import { getFolders, getUrls, deleteUrls, deleteFolders, reorderItems, moveUrl, moveFolder } from '@/lib/storage'
+import { getFolders, getUrls, deleteUrls, deleteFolders, reorderItems, moveUrl, moveFolder, getGuestBackground } from '@/lib/storage'
 import { deleteUrlsRemote, deleteFoldersRemote, reorderItemsRemote, moveUrlRemote, moveFolderRemote } from '@/lib/supabase-storage'
 import { Folder, UrlItem } from '@/lib/types'
 
@@ -22,12 +25,20 @@ export default function HomePage() {
   const {
     user, folders, urls, setFolders, setUrls, reload,
     selectMode, setSelectMode, selectedIds, clearSelection,
-    moveMode, setMoveMode,
+    moveMode, setMoveMode, bgVersion,
+    isHydrating,
   } = useApp()
+
+  const isPc = useIsPcViewport()
+  const globalBg = user
+    ? { url: user.bg_image_url, fx: isPc ? user.bg_focal_x_pc : user.bg_focal_x, fy: isPc ? user.bg_focal_y_pc : user.bg_focal_y }
+    : (() => { const g = getGuestBackground(); return { url: g.url, fx: isPc ? g.focal_x_pc : g.focal_x, fy: isPc ? g.focal_y_pc : g.focal_y } })()
+  void bgVersion // re-render trigger for guest bg updates
 
   const [addOpen, setAddOpen] = useState(false)
   const [folderOpen, setFolderOpen] = useState(false)
   const [accountOpen, setAccountOpen] = useState(false)
+  const [bgOpen, setBgOpen] = useState(false)
   const [fabOpen, setFabOpen] = useState(false)
 
   const isEmpty = folders.length === 0 && urls.length === 0
@@ -36,6 +47,14 @@ export default function HomePage() {
     useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 8 } })
   )
+
+  if (user && !user.has_password) {
+    return <PasswordSetupRequired />
+  }
+
+  if (isHydrating) {
+    return <AppSkeleton />
+  }
 
   // ---- Sort mode handlers ----
 
@@ -65,8 +84,8 @@ export default function HomePage() {
   }
 
   const handleSortDragEnd = (e: DragEndEvent) => {
-    const { active, over } = e
-    if (!over || active.id === over.id) return
+    const { active } = e
+    if (!active) return
 
     const activeData = active.data.current as { type: string; id: string }
     const activeItem = activeData.type === 'url'
@@ -265,9 +284,20 @@ export default function HomePage() {
       onDragOver={moveMode ? undefined : handleSortDragOver}
       onDragEnd={moveMode ? handleMoveDragEnd : handleSortDragEnd}
     >
-      <div className="min-h-screen bg-background flex flex-col max-w-lg mx-auto">
-        <header className="sticky top-0 z-10 bg-background/80 backdrop-blur border-b border-border px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2 min-w-0 shrink">
+      {globalBg.url && (
+        <div
+          className="fixed inset-0 -z-10 pointer-events-none"
+          style={{
+            backgroundImage: `url("${globalBg.url}")`,
+            backgroundPosition: `${globalBg.fx * 100}% ${globalBg.fy * 100}%`,
+            backgroundSize: 'cover',
+            backgroundRepeat: 'no-repeat',
+          }}
+        />
+      )}
+      <div className={`min-h-screen flex flex-col max-w-lg mx-auto ${globalBg.url ? '' : 'bg-background'}`}>
+        <header className={`sticky top-0 z-10 px-4 py-3 flex items-center justify-between ${globalBg.url ? 'bg-transparent' : 'bg-background/80 backdrop-blur border-b border-border'}`}>
+          <div className="flex items-center gap-2 min-w-0 shrink bg-white/10 backdrop-blur-md backdrop-saturate-150 border border-white/20 shadow-sm rounded-full px-3 py-1">
             <Link2 className="w-5 h-5 text-primary shrink-0" />
             <h1 className="font-bold text-lg tracking-tight truncate">Unit Catcher</h1>
           </div>
@@ -276,14 +306,14 @@ export default function HomePage() {
               <>
                 <button
                   onClick={() => { setSelectMode(!selectMode); if (selectMode) clearSelection() }}
-                  className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition-colors ${selectMode ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-muted'}`}
+                  className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition-colors border backdrop-blur-md backdrop-saturate-150 shadow-sm ${selectMode ? 'bg-primary text-primary-foreground border-primary/40' : 'bg-white/10 border-white/20 text-foreground/80 hover:text-foreground hover:bg-white/20'}`}
                 >
                   <CheckSquare className="w-3.5 h-3.5" />
                   選択
                 </button>
                 <button
                   onClick={() => setMoveMode(!moveMode)}
-                  className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition-colors ${moveMode ? 'bg-orange-500 text-white' : 'text-muted-foreground hover:text-foreground hover:bg-muted'}`}
+                  className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition-colors border backdrop-blur-md backdrop-saturate-150 shadow-sm ${moveMode ? 'bg-orange-500 text-white border-orange-400/40' : 'bg-white/10 border-white/20 text-foreground/80 hover:text-foreground hover:bg-white/20'}`}
                 >
                   {moveMode ? <FolderInput className="w-3.5 h-3.5" /> : <ArrowUpDown className="w-3.5 h-3.5" />}
                   {moveMode ? '移動中' : '並べ替え'}
@@ -292,9 +322,9 @@ export default function HomePage() {
             )}
             <button
               onClick={() => setAccountOpen(true)}
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0"
+              className="flex items-center gap-1 text-xs px-2 py-1 rounded-md border bg-white/10 border-white/20 backdrop-blur-md backdrop-saturate-150 shadow-sm text-foreground/80 hover:text-foreground hover:bg-white/20 transition-colors shrink-0"
             >
-              <UserCircle2 className="w-5 h-5" />
+              <UserCircle2 className="w-4 h-4" />
               <span className="max-w-[60px] truncate hidden sm:inline">{user ? user.account_name : 'ゲスト'}</span>
             </button>
           </div>
@@ -338,6 +368,12 @@ export default function HomePage() {
             {fabOpen && (
               <>
                 <div className="flex items-center gap-2">
+                  <span className="text-xs bg-foreground text-background rounded-full px-2.5 py-1 font-medium shadow">背景画像を設定</span>
+                  <button onClick={() => { setBgOpen(true); setFabOpen(false) }} className="w-12 h-12 rounded-full bg-muted shadow-lg flex items-center justify-center hover:bg-muted/80 transition-colors border border-border">
+                    <ImageIcon className="w-5 h-5" />
+                  </button>
+                </div>
+                <div className="flex items-center gap-2">
                   <span className="text-xs bg-foreground text-background rounded-full px-2.5 py-1 font-medium shadow">フォルダを作成</span>
                   <button onClick={() => { setFolderOpen(true); setFabOpen(false) }} className="w-12 h-12 rounded-full bg-muted shadow-lg flex items-center justify-center hover:bg-muted/80 transition-colors border border-border">
                     <FolderPlus className="w-5 h-5" />
@@ -367,6 +403,7 @@ export default function HomePage() {
       <AddSheet open={addOpen} onClose={() => setAddOpen(false)} />
       <CreateFolderDialog open={folderOpen} onClose={() => setFolderOpen(false)} />
       <AccountSheet open={accountOpen} onClose={() => setAccountOpen(false)} />
+      <GlobalBackgroundDialog open={bgOpen} onClose={() => setBgOpen(false)} />
     </DndContext>
   )
 }

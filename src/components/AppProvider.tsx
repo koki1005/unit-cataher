@@ -33,6 +33,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [moveMode, setMoveMode] = useState(false)
+  const [bgVersion, setBgVersion] = useState(0)
+  const [isHydrating, setIsHydrating] = useState(true)
   const hydratedUserIdRef = useRef<string | null>(null)
 
   const loadData = useCallback(async (u: User | null) => {
@@ -40,6 +42,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       hydratedUserIdRef.current = null
       setFolders(getFolders())
       setUrls(getUrls())
+      setIsHydrating(false)
       return
     }
 
@@ -57,6 +60,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       writeCache(urlsCacheKey(u.id), ul)
     } catch (error) {
       console.error('Failed to load remote Unit Catcher data', error)
+    } finally {
+      setIsHydrating(false)
     }
   }, [])
 
@@ -77,7 +82,27 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const raw = localStorage.getItem(USER_KEY)
-    const u: User | null = raw ? JSON.parse(raw) : null
+    let u: User | null = null
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as Partial<User>
+        if (parsed && parsed.id && parsed.account_name) {
+          u = {
+            id: parsed.id,
+            account_name: parsed.account_name,
+            created_at: parsed.created_at ?? '',
+            has_password: parsed.has_password ?? false,
+            bg_image_url: parsed.bg_image_url ?? null,
+            bg_focal_x: parsed.bg_focal_x ?? 0.5,
+            bg_focal_y: parsed.bg_focal_y ?? 0.5,
+            bg_focal_x_pc: parsed.bg_focal_x_pc ?? 0.5,
+            bg_focal_y_pc: parsed.bg_focal_y_pc ?? 0.5,
+          }
+        }
+      } catch {
+        u = null
+      }
+    }
     setUserState(u)
     loadData(u)
   }, [loadData])
@@ -114,6 +139,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       selectMode, setSelectMode,
       selectedIds, toggleSelect, clearSelection,
       moveMode, setMoveMode,
+      bgVersion, bumpBgVersion: () => setBgVersion(v => v + 1),
+      isHydrating,
     }}>
       {children}
     </AppContext.Provider>

@@ -27,7 +27,7 @@ export default function AddSheet({ open, onClose }: Props) {
   const [manualUrl, setManualUrl] = useState('')
   const [selectedFolder, setSelectedFolder] = useState<string>('root')
   const [step, setStep] = useState<'scan' | 'confirm'>('scan')
-  const [activeTab, setActiveTab] = useState('camera')
+  const [activeTab, setActiveTab] = useState('manual')
 
   const resetState = () => {
     setScannedUrl('')
@@ -35,7 +35,7 @@ export default function AddSheet({ open, onClose }: Props) {
     setManualUrl('')
     setSelectedFolder('root')
     setStep('scan')
-    setActiveTab('camera')
+    setActiveTab('manual')
   }
 
   const handleClose = () => {
@@ -88,18 +88,10 @@ export default function AddSheet({ open, onClose }: Props) {
         {step === 'scan' ? (
           <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-4">
             <TabsList className="w-full">
+              <TabsTrigger value="manual" className="flex-1">URLを貼る</TabsTrigger>
               <TabsTrigger value="camera" className="flex-1">カメラで読む</TabsTrigger>
               <TabsTrigger value="image" className="flex-1">画像から読む</TabsTrigger>
-              <TabsTrigger value="manual" className="flex-1">URLを貼る</TabsTrigger>
             </TabsList>
-
-            <TabsContent value="camera" className="mt-4">
-              {open && activeTab === 'camera' && <QrCamera onDetected={handleUrlDetected} />}
-            </TabsContent>
-
-            <TabsContent value="image" className="mt-4">
-              <QrUpload onDetected={handleUrlDetected} />
-            </TabsContent>
 
             <TabsContent value="manual" className="mt-4 space-y-3">
               <div className="space-y-1">
@@ -113,6 +105,14 @@ export default function AddSheet({ open, onClose }: Props) {
               <Button className="w-full" onClick={handleManualNext} disabled={!manualUrl.trim()}>
                 次へ
               </Button>
+            </TabsContent>
+
+            <TabsContent value="camera" className="mt-4">
+              {open && activeTab === 'camera' && <QrCamera onDetected={handleUrlDetected} />}
+            </TabsContent>
+
+            <TabsContent value="image" className="mt-4">
+              {activeTab === 'image' && <QrUpload onDetected={handleUrlDetected} />}
             </TabsContent>
           </Tabs>
         ) : (

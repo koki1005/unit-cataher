@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useSortable, SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { useDraggable, useDroppable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
@@ -10,13 +10,41 @@ import { useApp } from '@/lib/store'
 import { Folder as FolderType, UrlItem } from '@/lib/types'
 import {
   deleteFolder, renameFolder, deleteUrl, renameUrl,
+  setFolderBackground, setUrlBackground,
   getFolders, getUrls,
 } from '@/lib/storage'
 import {
   deleteFolderRemote, renameFolderRemote, deleteUrlRemote, renameUrlRemote,
+  setFolderBackgroundRemote, setUrlBackgroundRemote,
 } from '@/lib/supabase-storage'
-import RenameDialog from './RenameDialog'
+import EditItemDialog from './EditItemDialog'
 import { cn } from '@/lib/utils'
+
+export function useIsPcViewport() {
+  const [isPc, setIsPc] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 768px)')
+    const update = () => setIsPc(mq.matches)
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [])
+  return isPc
+}
+
+function bgStyle(url: string | null, fxPhone: number, fyPhone: number, fxPc: number, fyPc: number, isPc: boolean): React.CSSProperties | undefined {
+  if (!url) return undefined
+  const fx = isPc ? fxPc : fxPhone
+  const fy = isPc ? fyPc : fyPhone
+  return {
+    backgroundImage: `url("${url}")`,
+    backgroundPosition: `${fx * 100}% ${fy * 100}%`,
+    backgroundSize: 'cover',
+    backgroundRepeat: 'no-repeat',
+  }
+}
+
+const GLASS = 'bg-white/10 backdrop-blur-md backdrop-saturate-150 shadow-lg shadow-black/5'
 
 async function shareItems(items: UrlItem[]) {
   const text = items.map(u => `${u.name}\n${u.url}`).join('\n\n')
@@ -56,9 +84,12 @@ function GapDropZone({ containerId, index }: { containerId: string | null; index
 
 // ---- Sort mode components (useSortable) ----
 
+type EditSaveData = { name: string; bg_image_url: string | null; bg_focal_x: number; bg_focal_y: number; bg_focal_x_pc: number; bg_focal_y_pc: number }
+
 function SortableUrl({ item }: { item: UrlItem }) {
   const { user, setUrls, reload, selectMode, selectedIds, toggleSelect } = useApp()
-  const [renaming, setRenaming] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const isPc = useIsPcViewport()
 
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -69,6 +100,7 @@ function SortableUrl({ item }: { item: UrlItem }) {
 
   const style = { transform: CSS.Transform.toString(transform), transition }
   const isSelected = selectedIds.has(item.id)
+  const bg = bgStyle(item.bg_image_url, item.bg_focal_x, item.bg_focal_y, item.bg_focal_x_pc, item.bg_focal_y_pc, isPc)
 
   const handleDelete = async () => {
     if (!confirm(`「${item.name}」を削除しますか？`)) return
@@ -76,48 +108,79 @@ function SortableUrl({ item }: { item: UrlItem }) {
     else { deleteUrl(item.id); setUrls(getUrls()) }
   }
 
-  const handleRename = async (name: string) => {
-    if (user) { await renameUrlRemote(item.id, name); reload() }
-    else { renameUrl(item.id, name); setUrls(getUrls()) }
-    setRenaming(false)
+  const handleEditSave = async ({ name, bg_image_url, bg_focal_x, bg_focal_y, bg_focal_x_pc, bg_focal_y_pc }: EditSaveData) => {
+    if (user) {
+      if (name !== item.name) await renameUrlRemote(item.id, name)
+      await setUrlBackgroundRemote(item.id, bg_image_url, bg_focal_x, bg_focal_y, bg_focal_x_pc, bg_focal_y_pc)
+      reload()
+    } else {
+      if (name !== item.name) renameUrl(item.id, name)
+      setUrlBackground(item.id, bg_image_url, bg_focal_x, bg_focal_y, bg_focal_x_pc, bg_focal_y_pc)
+      setUrls(getUrls())
+    }
+    setEditing(false)
   }
 
   return (
     <>
       <div
         ref={setNodeRef}
-        style={style}
+        style={{ ...style, ...(bg ?? {}) }}
         className={cn(
-          'flex items-center gap-2 py-4 px-3 rounded-xl hover:bg-muted border-[3px] border-blue-600 group mb-1.5',
+          'relative flex items-center gap-2 py-4 px-3 rounded-xl border-[3px] border-blue-600/60 group mb-1.5 overflow-hidden',
+          !bg && GLASS,
           isDragging && 'opacity-40',
-          isSelected && 'bg-primary/10'
+          isSelected && 'bg-primary/20'
         )}
       >
         {selectMode ? (
-          <button onClick={() => toggleSelect(item.id)} className="flex items-center gap-1.5 flex-1 min-w-0">
+          <button onClick={() => toggleSelect(item.id)} className="relative z-10 flex items-center gap-1.5 flex-1 min-w-0">
             <input type="checkbox" readOnly checked={isSelected} className="w-5 h-5 shrink-0 accent-primary" />
-            <Link className="w-5 h-5 shrink-0 text-blue-500" />
-            <span className="text-base truncate">{item.name}</span>
+            <span className={cn(
+              "shrink-0 inline-flex items-center justify-center",
+              bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full p-1.5 shadow-sm"
+            )}>
+              <Link className="w-5 h-5 text-blue-500" />
+            </span>
+            <span className={cn(
+              "text-base truncate",
+              bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full px-3 py-0.5 shadow-sm"
+            )}>{item.name}</span>
           </button>
         ) : (
           <>
-            <div {...listeners} {...attributes} className="cursor-grab active:cursor-grabbing p-1 -ml-1 text-muted-foreground/40 hover:text-muted-foreground touch-none shrink-0">
+            <a
+              href={item.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={item.name}
+              className="absolute inset-0 z-0 rounded-xl"
+            />
+            <div {...listeners} {...attributes} className={cn("relative z-10 cursor-grab active:cursor-grabbing p-1 -ml-1 text-muted-foreground/40 hover:text-muted-foreground touch-none shrink-0", bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full ml-0 shadow-sm")}>
               <svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor">
                 <circle cx="2" cy="2" r="1.5"/><circle cx="8" cy="2" r="1.5"/>
                 <circle cx="2" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/>
                 <circle cx="2" cy="14" r="1.5"/><circle cx="8" cy="14" r="1.5"/>
               </svg>
             </div>
-            <a href={item.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 flex-1 min-w-0 self-stretch">
-              <Link className="w-5 h-5 shrink-0 text-blue-500" />
-              <span className="text-base truncate">{item.name}</span>
-            </a>
-            <div className="flex items-center gap-0.5 shrink-0">
+            <div className="relative z-10 flex items-center gap-1.5 flex-1 min-w-0 self-stretch pointer-events-none">
+              <span className={cn(
+              "shrink-0 inline-flex items-center justify-center",
+              bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full p-1.5 shadow-sm"
+            )}>
+              <Link className="w-5 h-5 text-blue-500" />
+            </span>
+              <span className={cn(
+                "text-base truncate",
+                bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full px-3 py-0.5 shadow-sm"
+              )}>{item.name}</span>
+            </div>
+            <div className={cn("relative z-10 flex items-center gap-0.5 shrink-0", bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full px-1 shadow-sm")}>
               <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => shareItems([item])}>
                 <Share2 className="w-4 h-4" />
               </Button>
 
-              <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setRenaming(true)}>
+              <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setEditing(true)}>
                 <Pencil className="w-4 h-4" />
               </Button>
               <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={handleDelete}>
@@ -127,7 +190,21 @@ function SortableUrl({ item }: { item: UrlItem }) {
           </>
         )}
       </div>
-      {renaming && <RenameDialog open initialName={item.name} onClose={() => setRenaming(false)} onSave={handleRename} />}
+      {editing && (
+        <EditItemDialog
+          open
+          scope="url"
+          itemId={item.id}
+          initialName={item.name}
+          initialBgUrl={item.bg_image_url}
+          initialFocalX={item.bg_focal_x}
+          initialFocalY={item.bg_focal_y}
+          initialFocalXPc={item.bg_focal_x_pc}
+          initialFocalYPc={item.bg_focal_y_pc}
+          onClose={() => setEditing(false)}
+          onSave={handleEditSave}
+        />
+      )}
     </>
   )
 }
@@ -135,7 +212,8 @@ function SortableUrl({ item }: { item: UrlItem }) {
 function SortableFolder({ folder, depth }: { folder: FolderType; depth: number }) {
   const { user, folders, urls, setFolders, setUrls, reload, selectMode, selectedIds, toggleSelect } = useApp()
   const [open, setOpen] = useState(false)
-  const [renaming, setRenaming] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const isPc = useIsPcViewport()
 
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -146,6 +224,7 @@ function SortableFolder({ folder, depth }: { folder: FolderType; depth: number }
 
   const style = { transform: CSS.Transform.toString(transform), transition }
   const isSelected = selectedIds.has(folder.id)
+  const bg = bgStyle(folder.bg_image_url, folder.bg_focal_x, folder.bg_focal_y, folder.bg_focal_x_pc, folder.bg_focal_y_pc, isPc)
 
   const handleDelete = async () => {
     if (!confirm(`「${folder.name}」を削除しますか？中のURLも全て削除されます。`)) return
@@ -153,10 +232,17 @@ function SortableFolder({ folder, depth }: { folder: FolderType; depth: number }
     else { deleteFolder(folder.id); setFolders(getFolders()); setUrls(getUrls()) }
   }
 
-  const handleRename = async (name: string) => {
-    if (user) { await renameFolderRemote(folder.id, name); reload() }
-    else { renameFolder(folder.id, name); setFolders(getFolders()) }
-    setRenaming(false)
+  const handleEditSave = async ({ name, bg_image_url, bg_focal_x, bg_focal_y, bg_focal_x_pc, bg_focal_y_pc }: EditSaveData) => {
+    if (user) {
+      if (name !== folder.name) await renameFolderRemote(folder.id, name)
+      await setFolderBackgroundRemote(folder.id, bg_image_url, bg_focal_x, bg_focal_y, bg_focal_x_pc, bg_focal_y_pc)
+      reload()
+    } else {
+      if (name !== folder.name) renameFolder(folder.id, name)
+      setFolderBackground(folder.id, bg_image_url, bg_focal_x, bg_focal_y, bg_focal_x_pc, bg_focal_y_pc)
+      setFolders(getFolders())
+    }
+    setEditing(false)
   }
 
   const handleShare = () => {
@@ -177,37 +263,69 @@ function SortableFolder({ folder, depth }: { folder: FolderType; depth: number }
         style={style}
         className={cn('rounded-lg transition-colors mb-1.5', isDragging && 'opacity-40', isSelected && 'bg-primary/10')}
       >
-        <div className="flex items-center gap-2 py-4 px-3 group border-[3px] border-zinc-900 rounded-xl">
-          {selectMode ? (
-            <button onClick={() => toggleSelect(folder.id)} className="flex items-center gap-1.5 flex-1 min-w-0">
+        <div
+          className={cn(
+            'relative flex items-center gap-2 py-4 px-3 group border-[3px] border-zinc-700/70 rounded-xl overflow-hidden',
+            !bg && GLASS
+          )}
+          style={bg ?? undefined}
+        >
+            {selectMode ? (
+            <button onClick={() => toggleSelect(folder.id)} className="relative z-10 flex items-center gap-1.5 flex-1 min-w-0">
               <input type="checkbox" readOnly checked={isSelected} className="w-5 h-5 shrink-0 accent-primary" />
-              {open ? <FolderOpen className="w-5 h-5 shrink-0 text-yellow-500" /> : <Folder className="w-5 h-5 shrink-0 text-yellow-500" />}
-              <span className="text-base font-medium truncate">{folder.name}</span>
+              <span className={cn(
+                "shrink-0 inline-flex items-center justify-center",
+                bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full p-1.5 shadow-sm"
+              )}>
+                {open ? <FolderOpen className="w-5 h-5 text-yellow-500" /> : <Folder className="w-5 h-5 text-yellow-500" />}
+              </span>
+              <span className={cn(
+                "text-base font-medium truncate",
+                bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full px-3 py-0.5 shadow-sm"
+              )}>{folder.name}</span>
             </button>
           ) : (
             <>
-              <div {...listeners} {...attributes} className="cursor-grab active:cursor-grabbing p-1 -ml-1 text-muted-foreground/40 hover:text-muted-foreground touch-none shrink-0">
+              <button
+                onClick={() => setOpen(p => !p)}
+                aria-label={folder.name}
+                className="absolute inset-0 z-0 rounded-xl"
+              />
+              <div {...listeners} {...attributes} className={cn("relative z-10 cursor-grab active:cursor-grabbing p-1 -ml-1 text-muted-foreground/40 hover:text-muted-foreground touch-none shrink-0", bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full ml-0 shadow-sm")}>
                 <svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor">
                   <circle cx="2" cy="2" r="1.5"/><circle cx="8" cy="2" r="1.5"/>
                   <circle cx="2" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/>
                   <circle cx="2" cy="14" r="1.5"/><circle cx="8" cy="14" r="1.5"/>
                 </svg>
               </div>
-              <button onClick={() => setOpen(p => !p)} className="flex items-center gap-1.5 flex-1 min-w-0 self-stretch">
-                {open ? <ChevronDown className="w-5 h-5 shrink-0 text-muted-foreground" /> : <ChevronRight className="w-5 h-5 shrink-0 text-muted-foreground" />}
-                {open ? <FolderOpen className="w-5 h-5 shrink-0 text-yellow-500" /> : <Folder className="w-5 h-5 shrink-0 text-yellow-500" />}
-                <span className="text-base font-medium truncate">{folder.name}</span>
-              </button>
-              <div className="flex items-center gap-0.5 shrink-0">
+              <div className="relative z-10 flex items-center gap-1.5 flex-1 min-w-0 self-stretch pointer-events-none">
+                <span className={cn(
+                  "shrink-0 inline-flex items-center justify-center",
+                  bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full p-1 shadow-sm"
+                )}>
+                  {open ? <ChevronDown className="w-5 h-5 text-muted-foreground" /> : <ChevronRight className="w-5 h-5 text-muted-foreground" />}
+                </span>
+                <span className={cn(
+                "shrink-0 inline-flex items-center justify-center",
+                bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full p-1.5 shadow-sm"
+              )}>
+                {open ? <FolderOpen className="w-5 h-5 text-yellow-500" /> : <Folder className="w-5 h-5 text-yellow-500" />}
+              </span>
+                <span className={cn(
+                "text-base font-medium truncate",
+                bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full px-3 py-0.5 shadow-sm"
+              )}>{folder.name}</span>
+              </div>
+              <div className={cn("relative z-10 flex items-center gap-0.5 shrink-0", bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full px-1 shadow-sm")}>
                 <Button size="icon" variant="ghost" className="h-8 w-8" onClick={handleShare}>
-                  <Share2 className="w-3 h-3" />
+                  <Share2 className="w-4 h-4" />
                 </Button>
 
-                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setRenaming(true)}>
-                  <Pencil className="w-3 h-3" />
+                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setEditing(true)}>
+                  <Pencil className="w-4 h-4" />
                 </Button>
                 <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={handleDelete}>
-                  <Trash2 className="w-3 h-3" />
+                  <Trash2 className="w-4 h-4" />
                 </Button>
               </div>
             </>
@@ -215,7 +333,21 @@ function SortableFolder({ folder, depth }: { folder: FolderType; depth: number }
         </div>
         {open && <FolderTree parentId={folder.id} depth={depth + 1} />}
       </div>
-      {renaming && <RenameDialog open initialName={folder.name} onClose={() => setRenaming(false)} onSave={handleRename} />}
+      {editing && (
+        <EditItemDialog
+          open
+          scope="folder"
+          itemId={folder.id}
+          initialName={folder.name}
+          initialBgUrl={folder.bg_image_url}
+          initialFocalX={folder.bg_focal_x}
+          initialFocalY={folder.bg_focal_y}
+          initialFocalXPc={folder.bg_focal_x_pc}
+          initialFocalYPc={folder.bg_focal_y_pc}
+          onClose={() => setEditing(false)}
+          onSave={handleEditSave}
+        />
+      )}
     </>
   )
 }
@@ -224,7 +356,8 @@ function SortableFolder({ folder, depth }: { folder: FolderType; depth: number }
 
 function DraggableUrl({ item }: { item: UrlItem }) {
   const { user, setUrls, reload, selectMode, selectedIds, toggleSelect } = useApp()
-  const [renaming, setRenaming] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const isPc = useIsPcViewport()
 
 
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -234,6 +367,7 @@ function DraggableUrl({ item }: { item: UrlItem }) {
   })
 
   const isSelected = selectedIds.has(item.id)
+  const bg = bgStyle(item.bg_image_url, item.bg_focal_x, item.bg_focal_y, item.bg_focal_x_pc, item.bg_focal_y_pc, isPc)
 
   const handleDelete = async () => {
     if (!confirm(`「${item.name}」を削除しますか？`)) return
@@ -241,47 +375,79 @@ function DraggableUrl({ item }: { item: UrlItem }) {
     else { deleteUrl(item.id); setUrls(getUrls()) }
   }
 
-  const handleRename = async (name: string) => {
-    if (user) { await renameUrlRemote(item.id, name); reload() }
-    else { renameUrl(item.id, name); setUrls(getUrls()) }
-    setRenaming(false)
+  const handleEditSave = async ({ name, bg_image_url, bg_focal_x, bg_focal_y, bg_focal_x_pc, bg_focal_y_pc }: EditSaveData) => {
+    if (user) {
+      if (name !== item.name) await renameUrlRemote(item.id, name)
+      await setUrlBackgroundRemote(item.id, bg_image_url, bg_focal_x, bg_focal_y, bg_focal_x_pc, bg_focal_y_pc)
+      reload()
+    } else {
+      if (name !== item.name) renameUrl(item.id, name)
+      setUrlBackground(item.id, bg_image_url, bg_focal_x, bg_focal_y, bg_focal_x_pc, bg_focal_y_pc)
+      setUrls(getUrls())
+    }
+    setEditing(false)
   }
 
   return (
     <>
       <div
         ref={setNodeRef}
+        style={bg ?? undefined}
         className={cn(
-          'flex items-center gap-2 py-4 px-3 rounded-xl hover:bg-muted border-[3px] border-blue-600 group mb-1.5',
+          'relative flex items-center gap-2 py-4 px-3 rounded-xl border-[3px] border-blue-600/60 group mb-1.5 overflow-hidden',
+          !bg && GLASS,
           isDragging && 'opacity-40',
-          isSelected && 'bg-primary/10'
+          isSelected && 'bg-primary/20'
         )}
       >
         {selectMode ? (
           <button onClick={() => toggleSelect(item.id)} className="flex items-center gap-1.5 flex-1 min-w-0">
             <input type="checkbox" readOnly checked={isSelected} className="w-5 h-5 shrink-0 accent-primary" />
-            <Link className="w-5 h-5 shrink-0 text-blue-500" />
-            <span className="text-base truncate">{item.name}</span>
+            <span className={cn(
+              "shrink-0 inline-flex items-center justify-center",
+              bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full p-1.5 shadow-sm"
+            )}>
+              <Link className="w-5 h-5 text-blue-500" />
+            </span>
+            <span className={cn(
+              "text-base truncate",
+              bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full px-3 py-0.5 shadow-sm"
+            )}>{item.name}</span>
           </button>
         ) : (
           <>
-            <div {...listeners} {...attributes} className="cursor-grab active:cursor-grabbing p-1 -ml-1 text-muted-foreground/40 hover:text-muted-foreground touch-none shrink-0">
+            <a
+              href={item.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={item.name}
+              className="absolute inset-0 z-0 rounded-xl"
+            />
+            <div {...listeners} {...attributes} className={cn("relative z-10 cursor-grab active:cursor-grabbing p-1 -ml-1 text-muted-foreground/40 hover:text-muted-foreground touch-none shrink-0", bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full ml-0 shadow-sm")}>
               <svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor">
                 <circle cx="2" cy="2" r="1.5"/><circle cx="8" cy="2" r="1.5"/>
                 <circle cx="2" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/>
                 <circle cx="2" cy="14" r="1.5"/><circle cx="8" cy="14" r="1.5"/>
               </svg>
             </div>
-            <a href={item.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 flex-1 min-w-0 self-stretch">
-              <Link className="w-5 h-5 shrink-0 text-blue-500" />
-              <span className="text-base truncate">{item.name}</span>
-            </a>
-            <div className="flex items-center gap-0.5 shrink-0">
+            <div className="relative z-10 flex items-center gap-1.5 flex-1 min-w-0 self-stretch pointer-events-none">
+              <span className={cn(
+              "shrink-0 inline-flex items-center justify-center",
+              bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full p-1.5 shadow-sm"
+            )}>
+              <Link className="w-5 h-5 text-blue-500" />
+            </span>
+              <span className={cn(
+                "text-base truncate",
+                bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full px-3 py-0.5 shadow-sm"
+              )}>{item.name}</span>
+            </div>
+            <div className={cn("relative z-10 flex items-center gap-0.5 shrink-0", bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full px-1 shadow-sm")}>
               <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => shareItems([item])}>
                 <Share2 className="w-4 h-4" />
               </Button>
 
-              <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setRenaming(true)}>
+              <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setEditing(true)}>
                 <Pencil className="w-4 h-4" />
               </Button>
               <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={handleDelete}>
@@ -291,7 +457,21 @@ function DraggableUrl({ item }: { item: UrlItem }) {
           </>
         )}
       </div>
-      {renaming && <RenameDialog open initialName={item.name} onClose={() => setRenaming(false)} onSave={handleRename} />}
+      {editing && (
+        <EditItemDialog
+          open
+          scope="url"
+          itemId={item.id}
+          initialName={item.name}
+          initialBgUrl={item.bg_image_url}
+          initialFocalX={item.bg_focal_x}
+          initialFocalY={item.bg_focal_y}
+          initialFocalXPc={item.bg_focal_x_pc}
+          initialFocalYPc={item.bg_focal_y_pc}
+          onClose={() => setEditing(false)}
+          onSave={handleEditSave}
+        />
+      )}
     </>
   )
 }
@@ -299,7 +479,8 @@ function DraggableUrl({ item }: { item: UrlItem }) {
 function DraggableFolder({ folder, depth }: { folder: FolderType; depth: number }) {
   const { user, folders, urls, setFolders, setUrls, reload, selectMode, selectedIds, toggleSelect } = useApp()
   const [open, setOpen] = useState(false)
-  const [renaming, setRenaming] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const isPc = useIsPcViewport()
 
 
   const { attributes, listeners, setNodeRef: setDragRef, isDragging } = useDraggable({
@@ -315,6 +496,7 @@ function DraggableFolder({ folder, depth }: { folder: FolderType; depth: number 
 
   const setNodeRef = (node: HTMLElement | null) => { setDragRef(node); setDropRef(node) }
   const isSelected = selectedIds.has(folder.id)
+  const bg = bgStyle(folder.bg_image_url, folder.bg_focal_x, folder.bg_focal_y, folder.bg_focal_x_pc, folder.bg_focal_y_pc, isPc)
 
   const handleDelete = async () => {
     if (!confirm(`「${folder.name}」を削除しますか？中のURLも全て削除されます。`)) return
@@ -322,10 +504,17 @@ function DraggableFolder({ folder, depth }: { folder: FolderType; depth: number 
     else { deleteFolder(folder.id); setFolders(getFolders()); setUrls(getUrls()) }
   }
 
-  const handleRename = async (name: string) => {
-    if (user) { await renameFolderRemote(folder.id, name); reload() }
-    else { renameFolder(folder.id, name); setFolders(getFolders()) }
-    setRenaming(false)
+  const handleEditSave = async ({ name, bg_image_url, bg_focal_x, bg_focal_y, bg_focal_x_pc, bg_focal_y_pc }: EditSaveData) => {
+    if (user) {
+      if (name !== folder.name) await renameFolderRemote(folder.id, name)
+      await setFolderBackgroundRemote(folder.id, bg_image_url, bg_focal_x, bg_focal_y, bg_focal_x_pc, bg_focal_y_pc)
+      reload()
+    } else {
+      if (name !== folder.name) renameFolder(folder.id, name)
+      setFolderBackground(folder.id, bg_image_url, bg_focal_x, bg_focal_y, bg_focal_x_pc, bg_focal_y_pc)
+      setFolders(getFolders())
+    }
+    setEditing(false)
   }
 
   const handleShare = () => {
@@ -345,37 +534,70 @@ function DraggableFolder({ folder, depth }: { folder: FolderType; depth: number 
         ref={setNodeRef}
         className={cn('rounded-xl transition-colors mb-1.5', isDragging && 'opacity-40', isSelected && 'bg-primary/10')}
       >
-        <div className={cn('flex items-center gap-2 py-4 px-3 group border-[3px] rounded-xl transition-colors', isOver ? 'border-primary bg-primary/10' : 'border-zinc-900')}>
-          {selectMode ? (
-            <button onClick={() => toggleSelect(folder.id)} className="flex items-center gap-1.5 flex-1 min-w-0">
+        <div
+          className={cn(
+            'relative flex items-center gap-2 py-4 px-3 group border-[3px] rounded-xl transition-colors overflow-hidden',
+            isOver ? 'border-primary bg-primary/20' : 'border-zinc-700/70',
+            !bg && GLASS
+          )}
+          style={bg ?? undefined}
+        >
+            {selectMode ? (
+            <button onClick={() => toggleSelect(folder.id)} className="relative z-10 flex items-center gap-1.5 flex-1 min-w-0">
               <input type="checkbox" readOnly checked={isSelected} className="w-5 h-5 shrink-0 accent-primary" />
-              {open ? <FolderOpen className="w-5 h-5 shrink-0 text-yellow-500" /> : <Folder className="w-5 h-5 shrink-0 text-yellow-500" />}
-              <span className="text-base font-medium truncate">{folder.name}</span>
+              <span className={cn(
+                "shrink-0 inline-flex items-center justify-center",
+                bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full p-1.5 shadow-sm"
+              )}>
+                {open ? <FolderOpen className="w-5 h-5 text-yellow-500" /> : <Folder className="w-5 h-5 text-yellow-500" />}
+              </span>
+              <span className={cn(
+                "text-base font-medium truncate",
+                bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full px-3 py-0.5 shadow-sm"
+              )}>{folder.name}</span>
             </button>
           ) : (
             <>
-              <div {...listeners} {...attributes} className="cursor-grab active:cursor-grabbing p-1 -ml-1 text-muted-foreground/40 hover:text-muted-foreground touch-none shrink-0">
+              <button
+                onClick={() => setOpen(p => !p)}
+                aria-label={folder.name}
+                className="absolute inset-0 z-0 rounded-xl"
+              />
+              <div {...listeners} {...attributes} className={cn("relative z-10 cursor-grab active:cursor-grabbing p-1 -ml-1 text-muted-foreground/40 hover:text-muted-foreground touch-none shrink-0", bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full ml-0 shadow-sm")}>
                 <svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor">
                   <circle cx="2" cy="2" r="1.5"/><circle cx="8" cy="2" r="1.5"/>
                   <circle cx="2" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/>
                   <circle cx="2" cy="14" r="1.5"/><circle cx="8" cy="14" r="1.5"/>
                 </svg>
               </div>
-              <button onClick={() => setOpen(p => !p)} className="flex items-center gap-1.5 flex-1 min-w-0 self-stretch">
-                {open ? <ChevronDown className="w-5 h-5 shrink-0 text-muted-foreground" /> : <ChevronRight className="w-5 h-5 shrink-0 text-muted-foreground" />}
-                {open ? <FolderOpen className="w-5 h-5 shrink-0 text-yellow-500" /> : <Folder className="w-5 h-5 shrink-0 text-yellow-500" />}
-                <span className="text-base font-medium truncate">{folder.name}</span>
-              </button>
-              <div className="flex items-center gap-0.5 shrink-0">
+              <div className="relative z-10 flex items-center gap-1.5 flex-1 min-w-0 self-stretch pointer-events-none">
+                <span className={cn(
+                  "shrink-0 inline-flex items-center justify-center",
+                  bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full p-1 shadow-sm"
+                )}>
+                  {open ? <ChevronDown className="w-5 h-5 text-muted-foreground" /> : <ChevronRight className="w-5 h-5 text-muted-foreground" />}
+                </span>
+                <span className={cn(
+                "shrink-0 inline-flex items-center justify-center",
+                bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full p-1.5 shadow-sm"
+              )}>
+                {open ? <FolderOpen className="w-5 h-5 text-yellow-500" /> : <Folder className="w-5 h-5 text-yellow-500" />}
+              </span>
+                <span className={cn(
+                "text-base font-medium truncate",
+                bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full px-3 py-0.5 shadow-sm"
+              )}>{folder.name}</span>
+              </div>
+              <div className={cn("relative z-10 flex items-center gap-0.5 shrink-0", bg && "bg-white/25 backdrop-blur-md backdrop-saturate-150 rounded-full px-1 shadow-sm")}>
                 <Button size="icon" variant="ghost" className="h-8 w-8" onClick={handleShare}>
-                  <Share2 className="w-3 h-3" />
+                  <Share2 className="w-4 h-4" />
                 </Button>
 
-                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setRenaming(true)}>
-                  <Pencil className="w-3 h-3" />
+                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setEditing(true)}>
+                  <Pencil className="w-4 h-4" />
                 </Button>
                 <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={handleDelete}>
-                  <Trash2 className="w-3 h-3" />
+                  <Trash2 className="w-4 h-4" />
                 </Button>
               </div>
             </>
@@ -383,7 +605,21 @@ function DraggableFolder({ folder, depth }: { folder: FolderType; depth: number 
         </div>
         {open && <FolderTree parentId={folder.id} depth={depth + 1} />}
       </div>
-      {renaming && <RenameDialog open initialName={folder.name} onClose={() => setRenaming(false)} onSave={handleRename} />}
+      {editing && (
+        <EditItemDialog
+          open
+          scope="folder"
+          itemId={folder.id}
+          initialName={folder.name}
+          initialBgUrl={folder.bg_image_url}
+          initialFocalX={folder.bg_focal_x}
+          initialFocalY={folder.bg_focal_y}
+          initialFocalXPc={folder.bg_focal_x_pc}
+          initialFocalYPc={folder.bg_focal_y_pc}
+          onClose={() => setEditing(false)}
+          onSave={handleEditSave}
+        />
+      )}
     </>
   )
 }
